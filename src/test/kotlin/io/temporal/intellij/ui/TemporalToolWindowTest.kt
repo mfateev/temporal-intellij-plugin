@@ -45,19 +45,19 @@ class TemporalToolWindowTest : BaseUiTest() {
 
     @Test
     @Order(2)
-    fun `test connection settings are displayed`() = step("Verify Connection Settings Display") {
+    fun `test connection info and settings button are displayed`() = step("Verify Connection Info Display") {
         val ideFrame = remoteRobot.ideFrame()
 
         // Ensure tool window is open
         val toolWindow = ideFrame.findTemporalToolWindow() ?: ideFrame.openTemporalToolWindow()
 
-        // Verify Test Connection button exists
-        val testConnectionButton = toolWindow.testConnectionButton
-        assertTrue(testConnectionButton.isShowing) { "Test Connection button should be visible" }
-
         // Verify Settings button exists
         val settingsButton = toolWindow.settingsButton
         assertTrue(settingsButton.isShowing) { "Settings button should be visible" }
+
+        // Verify connection info is displayed
+        val connectionInfo = toolWindow.connectionInfoLabel
+        assertTrue(connectionInfo != null) { "Connection info should be visible" }
     }
 
     @Test

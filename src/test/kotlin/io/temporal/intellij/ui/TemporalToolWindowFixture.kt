@@ -17,19 +17,12 @@ class TemporalToolWindowFixture(
     remoteComponent: RemoteComponent
 ) : CommonContainerFixture(remoteRobot, remoteComponent) {
 
-    val testConnectionButton
-        get() = button(byXpath("//div[@class='JButton' and @text='Test Connection']"))
-
     val settingsButton
         get() = button(byXpath("//div[@class='JButton' and @text='Settings']"))
 
-    val serverAddressLabel
-        get() = findAll<JLabelFixture>(byXpath("//div[@class='JLabel']"))
-            .firstOrNull { it.hasText("Server:") || it.hasText("localhost") }
-
-    val connectionStatus
-        get() = findAll<JLabelFixture>(byXpath("//div[@class='JLabel']"))
-            .firstOrNull { it.hasText("Connected") || it.hasText("Not connected") || it.hasText("Error") }
+    val connectionInfoLabel
+        get() = findAll<JLabelFixture>(byXpath("//div[@class='JBLabel']"))
+            .firstOrNull { it.hasText("localhost") || it.hasText("7233") || it.hasText("default") }
 
     // Workflow Inspector elements (Phase 1)
     val workflowIdField
