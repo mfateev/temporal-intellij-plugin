@@ -1,26 +1,29 @@
 package io.temporal.intellij.toolwindow
 
+import com.intellij.openapi.Disposable
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.options.ShowSettingsUtil
 import com.intellij.openapi.progress.ProgressIndicator
 import com.intellij.openapi.progress.ProgressManager
 import com.intellij.openapi.progress.Task
 import com.intellij.openapi.project.Project
-import com.intellij.openapi.ui.Messages
 import com.intellij.ui.components.JBLabel
 import com.intellij.ui.components.JBPanel
+import com.intellij.ui.components.JBTabbedPane
 import com.intellij.util.ui.JBUI
 import io.temporal.intellij.settings.TemporalConnectionTester
 import io.temporal.intellij.settings.TemporalSettings
+import io.temporal.intellij.workflow.WorkflowInspectorPanel
 import java.awt.BorderLayout
 import java.awt.FlowLayout
 import javax.swing.JButton
 import javax.swing.JPanel
 
-class TemporalToolWindowPanel(private val project: Project) : JBPanel<TemporalToolWindowPanel>(BorderLayout()) {
+class TemporalToolWindowPanel(private val project: Project) : JBPanel<TemporalToolWindowPanel>(BorderLayout()), Disposable {
     private val settings = TemporalSettings.getInstance(project)
     private val statusLabel = JBLabel()
     private val connectionStatusLabel = JBLabel()
+    private val workflowInspectorPanel = WorkflowInspectorPanel(project)
 
     init {
         val headerPanel = JPanel(FlowLayout(FlowLayout.LEFT))
@@ -38,6 +41,20 @@ class TemporalToolWindowPanel(private val project: Project) : JBPanel<TemporalTo
         headerPanel.add(settingsButton)
         add(headerPanel, BorderLayout.NORTH)
 
+        // Create tabbed pane
+        val tabbedPane = JBTabbedPane()
+
+        // Workflow Inspector tab (default)
+        tabbedPane.addTab("Workflow Inspector", workflowInspectorPanel)
+
+        // Connection tab
+        val connectionPanel = createConnectionPanel()
+        tabbedPane.addTab("Connection", connectionPanel)
+
+        add(tabbedPane, BorderLayout.CENTER)
+    }
+
+    private fun createConnectionPanel(): JPanel {
         val contentPanel = JBPanel<JBPanel<*>>(BorderLayout())
         contentPanel.border = JBUI.Borders.empty(10)
 
@@ -47,7 +64,7 @@ class TemporalToolWindowPanel(private val project: Project) : JBPanel<TemporalTo
         connectionStatusLabel.border = JBUI.Borders.emptyTop(10)
         contentPanel.add(connectionStatusLabel, BorderLayout.SOUTH)
 
-        add(contentPanel, BorderLayout.CENTER)
+        return contentPanel
     }
 
     private fun updateStatusLabel() {
@@ -87,5 +104,9 @@ class TemporalToolWindowPanel(private val project: Project) : JBPanel<TemporalTo
                 }
             }
         })
+    }
+
+    override fun dispose() {
+        workflowInspectorPanel.dispose()
     }
 }
