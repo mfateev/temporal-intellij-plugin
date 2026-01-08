@@ -15,6 +15,7 @@ import com.intellij.util.ui.JBUI
 import io.temporal.intellij.settings.TemporalSettings
 import java.awt.BorderLayout
 import java.awt.FlowLayout
+import javax.swing.Box
 import java.time.Duration
 import java.time.Instant
 import java.time.ZoneId
@@ -85,26 +86,28 @@ class WorkflowInspectorPanel(private val project: Project) : JBPanel<WorkflowIns
         panel.layout = BoxLayout(panel, BoxLayout.Y_AXIS)
         panel.border = JBUI.Borders.emptyBottom(10)
 
-        // Row 1: Workflow ID label + field + browse button
-        val row1 = JBPanel<JBPanel<*>>(FlowLayout(FlowLayout.LEFT, 5, 2))
-        row1.add(JBLabel("Workflow ID:"))
+        // Row 1: Workflow ID
+        val row1 = JBPanel<JBPanel<*>>(BorderLayout(5, 0))
+        row1.add(JBLabel("Workflow ID:"), BorderLayout.WEST)
         workflowIdField.toolTipText = "Enter the workflow ID to inspect"
-        row1.add(workflowIdField)
+        row1.add(workflowIdField, BorderLayout.CENTER)
         browseButton.toolTipText = "Browse recent workflows"
         browseButton.addActionListener { browseWorkflows() }
-        row1.add(browseButton)
+        row1.add(browseButton, BorderLayout.EAST)
         panel.add(row1)
+        panel.add(Box.createVerticalStrut(5))
 
-        // Row 2: Run ID label + field
-        val row2 = JBPanel<JBPanel<*>>(FlowLayout(FlowLayout.LEFT, 5, 2))
-        row2.add(JBLabel("Run ID (optional):"))
+        // Row 2: Run ID
+        val row2 = JBPanel<JBPanel<*>>(BorderLayout(5, 0))
+        row2.add(JBLabel("Run ID (optional):"), BorderLayout.WEST)
         runIdField.toolTipText = "Leave empty to get the latest run"
         runIdField.emptyText.text = "latest"
-        row2.add(runIdField)
+        row2.add(runIdField, BorderLayout.CENTER)
         panel.add(row2)
+        panel.add(Box.createVerticalStrut(5))
 
         // Row 3: Action buttons
-        val row3 = JBPanel<JBPanel<*>>(FlowLayout(FlowLayout.LEFT, 5, 2))
+        val row3 = JBPanel<JBPanel<*>>(FlowLayout(FlowLayout.LEFT, 5, 0))
         inspectButton.toolTipText = "Fetch and display workflow execution details"
         inspectButton.addActionListener { loadWorkflow() }
         row3.add(inspectButton)
