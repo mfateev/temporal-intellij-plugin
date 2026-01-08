@@ -19,6 +19,7 @@ import io.temporal.api.workflowservice.v1.GetWorkflowExecutionHistoryRequest
 import io.temporal.api.workflowservice.v1.ListWorkflowExecutionsRequest
 import io.temporal.api.workflowservice.v1.QueryWorkflowRequest
 import io.temporal.api.workflowservice.v1.WorkflowServiceGrpc
+import io.temporal.intellij.codec.CodecClient
 import io.temporal.intellij.settings.TemporalSettings
 import java.io.File
 import java.time.Duration
@@ -32,6 +33,7 @@ class WorkflowService(private val settings: TemporalSettings.State) {
 
     private var channel: ManagedChannel? = null
     private var stub: WorkflowServiceGrpc.WorkflowServiceBlockingStub? = null
+    private val codecClient: CodecClient = CodecClient(settings)
 
     /**
      * Connect to the Temporal server.
@@ -529,13 +531,47 @@ class WorkflowService(private val settings: TemporalSettings.State) {
         }
     }
 
+    /**
+     * Attempt to decode a payload, first using the codec server if configured,
+     * then falling back to direct UTF-8 decoding.
+     */
     private fun tryDecodePayload(payload: io.temporal.api.common.v1.Payload): String? {
         return try {
-            payload.data.toStringUtf8()
+            // If codec server is configured, try to decode through it first
+            val payloadToRead = if (codecClient.isConfigured()) {
+                codecClient.decode(payload).getOrNull() ?: payload
+            } else {
+                payload
+            }
+
+            // Check the encoding metadata to determine how to decode
+            val encoding = payloadToRead.metadataMap["encoding"]?.toStringUtf8() ?: ""
+
+            when {
+                encoding.contains("json") -> payloadToRead.data.toStringUtf8()
+                encoding.contains("plain") -> payloadToRead.data.toStringUtf8()
+                encoding.contains("protobuf") -> "<protobuf: ${payloadToRead.data.size()} bytes>"
+                encoding.contains("binary") -> "<binary: ${payloadToRead.data.size()} bytes>"
+                else -> {
+                    // Try UTF-8 decoding as fallback
+                    val text = payloadToRead.data.toStringUtf8()
+                    // Check if it looks like valid text (no control characters except newlines/tabs)
+                    if (text.all { it.isWhitespace() || !it.isISOControl() }) {
+                        text
+                    } else {
+                        "<binary: ${payloadToRead.data.size()} bytes>"
+                    }
+                }
+            }
         } catch (e: Exception) {
             null
         }
     }
+
+    /**
+     * Get the codec client for external use (e.g., testing connection).
+     */
+    fun getCodecClient(): CodecClient = codecClient
 }
 
 /**

@@ -10,6 +10,7 @@ import com.intellij.openapi.project.Project
 import com.intellij.openapi.ui.DialogPanel
 import com.intellij.openapi.ui.Messages
 import com.intellij.ui.dsl.builder.*
+import io.temporal.intellij.codec.CodecClient
 
 class TemporalSettingsConfigurable(private val project: Project) : BoundConfigurable("Temporal") {
     private val settings = TemporalSettings.getInstance(project)
@@ -84,6 +85,43 @@ class TemporalSettingsConfigurable(private val project: Project) : BoundConfigur
                     .comment("Warning: Only use for development/testing")
             }
         }
+
+        group("Codec Server") {
+            row("Endpoint:") {
+                textField()
+                    .bindText(state::codecEndpoint)
+                    .columns(COLUMNS_LARGE)
+                    .comment("Remote Codec Server URL (e.g., http://localhost:8888)")
+            }
+            row("Authorization:") {
+                passwordField()
+                    .bindText(state::codecAuth)
+                    .columns(COLUMNS_LARGE)
+                    .comment("Authorization header value (e.g., Bearer token)")
+            }
+            row("Headers:") {
+                textArea()
+                    .bindText(
+                        { state.codecHeaders.joinToString("\n") },
+                        { text ->
+                            state.codecHeaders.clear()
+                            state.codecHeaders.addAll(
+                                text.split("\n")
+                                    .map { it.trim() }
+                                    .filter { it.isNotEmpty() && it.contains("=") }
+                            )
+                        }
+                    )
+                    .rows(3)
+                    .columns(COLUMNS_LARGE)
+                    .comment("Custom HTTP headers, one per line (KEY=VALUE)")
+            }
+            row {
+                button("Test Codec Connection") {
+                    testCodecConnection()
+                }
+            }
+        }
     }
 
     private fun testConnection() {
@@ -107,6 +145,38 @@ class TemporalSettingsConfigurable(private val project: Project) : BoundConfigur
                     } else {
                         Messages.showErrorDialog(project, result.message, "Connection Failed")
                     }
+                }
+            }
+        })
+    }
+
+    private fun testCodecConnection() {
+        // Apply current UI values to state before testing
+        apply()
+
+        val state = settings.state
+        if (state.codecEndpoint.isBlank()) {
+            Messages.showWarningDialog(project, "Please enter a Codec Server endpoint first.", "No Endpoint Configured")
+            return
+        }
+
+        ProgressManager.getInstance().run(object : Task.Backgroundable(project, "Testing Codec Server Connection", false) {
+            override fun run(indicator: ProgressIndicator) {
+                indicator.text = "Connecting to ${state.codecEndpoint}..."
+                indicator.isIndeterminate = true
+
+                val codecClient = CodecClient(state)
+                val result = codecClient.testConnection()
+
+                ApplicationManager.getApplication().invokeLater {
+                    result.fold(
+                        onSuccess = { message ->
+                            Messages.showInfoMessage(project, message, "Codec Server Connection Successful")
+                        },
+                        onFailure = { error ->
+                            Messages.showErrorDialog(project, error.message ?: "Unknown error", "Codec Server Connection Failed")
+                        }
+                    )
                 }
             }
         })

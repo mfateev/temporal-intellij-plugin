@@ -23,7 +23,12 @@ class TemporalSettings : PersistentStateComponent<TemporalSettings.State> {
         var clientKeyPath: String = "",
         var serverCACertPath: String = "",
         var serverName: String = "",
-        var disableHostVerification: Boolean = false
+        var disableHostVerification: Boolean = false,
+
+        // Codec Server settings
+        var codecEndpoint: String = "",
+        var codecAuth: String = "",
+        var codecHeaders: MutableList<String> = mutableListOf()
     )
 
     override fun getState(): State = myState
