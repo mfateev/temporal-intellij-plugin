@@ -14,12 +14,20 @@
 
     <depends>com.intellij.modules.platform</depends>
 
+    <extensions defaultExtensionNs="com.intellij">
+        <toolWindow id="Temporal"
+                    anchor="right"
+                    factoryClass="io.temporal.intellij.toolwindow.TemporalToolWindowFactory"
+                    icon="/icons/temporal_13.png"/>
+    </extensions>
+
     <actions>
         <group id="Temporal.ToolsMenu" text="Temporal" description="Temporal tools" popup="true">
             <add-to-group group-id="ToolsMenu" anchor="last"/>
             <action id="Temporal.HelloWorld"
                     class="io.temporal.intellij.HelloWorldAction"
                     text="Hello World"
+                    icon="/icons/temporal_16.png"
                     description="Say hello from Temporal plugin"/>
         </group>
     </actions>
