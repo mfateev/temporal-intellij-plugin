@@ -1,9 +1,14 @@
 package io.temporal.intellij.settings
 
+import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.fileChooser.FileChooserDescriptorFactory
 import com.intellij.openapi.options.BoundConfigurable
+import com.intellij.openapi.progress.ProgressIndicator
+import com.intellij.openapi.progress.ProgressManager
+import com.intellij.openapi.progress.Task
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.ui.DialogPanel
+import com.intellij.openapi.ui.Messages
 import com.intellij.ui.dsl.builder.*
 
 class TemporalSettingsConfigurable(private val project: Project) : BoundConfigurable("Temporal") {
@@ -30,6 +35,11 @@ class TemporalSettingsConfigurable(private val project: Project) : BoundConfigur
                     .bindText(state::apiKey)
                     .columns(COLUMNS_LARGE)
                     .comment("API key for Temporal Cloud or authenticated connections")
+            }
+            row {
+                button("Test Connection") {
+                    testConnection()
+                }
             }
         }
 
@@ -74,5 +84,31 @@ class TemporalSettingsConfigurable(private val project: Project) : BoundConfigur
                     .comment("Warning: Only use for development/testing")
             }
         }
+    }
+
+    private fun testConnection() {
+        // Apply current UI values to state before testing
+        apply()
+
+        ProgressManager.getInstance().run(object : Task.Backgroundable(project, "Testing Temporal Connection", false) {
+            override fun run(indicator: ProgressIndicator) {
+                indicator.text = "Connecting to ${settings.state.address}..."
+                indicator.isIndeterminate = true
+
+                val result = TemporalConnectionTester.testConnection(settings.state)
+
+                ApplicationManager.getApplication().invokeLater {
+                    if (result.success) {
+                        val message = buildString {
+                            append(result.message)
+                            result.serverInfo?.let { append("\n\n$it") }
+                        }
+                        Messages.showInfoMessage(project, message, "Connection Successful")
+                    } else {
+                        Messages.showErrorDialog(project, result.message, "Connection Failed")
+                    }
+                }
+            }
+        })
     }
 }

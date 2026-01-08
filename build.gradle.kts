@@ -20,6 +20,9 @@ dependencies {
         pluginVerifier()
         zipSigner()
     }
+
+    // Temporal SDK for server connectivity
+    implementation("io.temporal:temporal-sdk:1.27.0")
 }
 
 kotlin {
