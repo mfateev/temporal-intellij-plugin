@@ -10,6 +10,7 @@ import io.temporal.api.common.v1.WorkflowExecution
 import io.temporal.api.enums.v1.WorkflowExecutionStatus
 import io.temporal.api.workflowservice.v1.DescribeWorkflowExecutionRequest
 import io.temporal.api.workflowservice.v1.DescribeWorkflowExecutionResponse
+import io.temporal.api.workflowservice.v1.ListWorkflowExecutionsRequest
 import io.temporal.api.workflowservice.v1.WorkflowServiceGrpc
 import io.temporal.intellij.settings.TemporalSettings
 import java.io.File
@@ -108,6 +109,46 @@ class WorkflowService(private val settings: TemporalSettings.State) {
         } catch (e: StatusRuntimeException) {
             val message = when (e.status.code) {
                 Status.Code.NOT_FOUND -> "Workflow not found: $workflowId"
+                Status.Code.UNAVAILABLE -> "Server unavailable"
+                Status.Code.DEADLINE_EXCEEDED -> "Request timed out"
+                Status.Code.PERMISSION_DENIED -> "Permission denied"
+                Status.Code.UNAUTHENTICATED -> "Authentication failed"
+                else -> "Error: ${e.status.description ?: e.message}"
+            }
+            Result.failure(WorkflowServiceException(message, e))
+        } catch (e: Exception) {
+            Result.failure(WorkflowServiceException("Error: ${e.message}", e))
+        }
+    }
+
+    /**
+     * List recent workflow executions.
+     */
+    fun listWorkflows(pageSize: Int = 20): Result<List<WorkflowListItem>> {
+        val stub = this.stub ?: return Result.failure(IllegalStateException("Not connected"))
+
+        return try {
+            val request = ListWorkflowExecutionsRequest.newBuilder()
+                .setNamespace(settings.namespace)
+                .setPageSize(pageSize)
+                .build()
+
+            val response = stub.listWorkflowExecutions(request)
+
+            val workflows = response.executionsList.map { info ->
+                WorkflowListItem(
+                    workflowId = info.execution.workflowId,
+                    runId = info.execution.runId,
+                    workflowType = info.type.name,
+                    status = mapStatus(info.status),
+                    startTime = if (info.hasStartTime())
+                        Instant.ofEpochSecond(info.startTime.seconds, info.startTime.nanos.toLong())
+                    else null
+                )
+            }
+            Result.success(workflows)
+        } catch (e: StatusRuntimeException) {
+            val message = when (e.status.code) {
                 Status.Code.UNAVAILABLE -> "Server unavailable"
                 Status.Code.DEADLINE_EXCEEDED -> "Request timed out"
                 Status.Code.PERMISSION_DENIED -> "Permission denied"
@@ -275,4 +316,12 @@ data class PendingTimerInfo(
     val timerId: String,
     val startToFireDuration: Duration?,
     val firesAt: Instant?
+)
+
+data class WorkflowListItem(
+    val workflowId: String,
+    val runId: String,
+    val workflowType: String,
+    val status: WorkflowStatus,
+    val startTime: Instant?
 )

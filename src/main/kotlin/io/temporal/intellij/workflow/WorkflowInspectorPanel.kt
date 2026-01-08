@@ -15,8 +15,6 @@ import com.intellij.util.ui.JBUI
 import io.temporal.intellij.settings.TemporalSettings
 import java.awt.BorderLayout
 import java.awt.FlowLayout
-import java.awt.GridBagConstraints
-import java.awt.GridBagLayout
 import java.time.Duration
 import java.time.Instant
 import java.time.ZoneId
@@ -31,9 +29,10 @@ class WorkflowInspectorPanel(private val project: Project) : JBPanel<WorkflowIns
     private val settings = TemporalSettings.getInstance(project)
     private var workflowService: WorkflowService? = null
 
-    // Input components
-    private val workflowIdField = JBTextField(50)
-    private val runIdField = JBTextField(30)
+    // Input components - use fixed column width for UUID display
+    private val workflowIdField = JBTextField(36)  // UUID length
+    private val browseButton = JButton("...")
+    private val runIdField = JBTextField(36)  // UUID length
     private val inspectButton = JButton("Inspect")
     private val refreshButton = JButton(AllIcons.Actions.Refresh)
 
@@ -82,54 +81,42 @@ class WorkflowInspectorPanel(private val project: Project) : JBPanel<WorkflowIns
     }
 
     private fun createInputPanel(): JPanel {
-        val panel = JPanel(GridBagLayout())
+        val panel = JBPanel<JBPanel<*>>()
+        panel.layout = BoxLayout(panel, BoxLayout.Y_AXIS)
         panel.border = JBUI.Borders.emptyBottom(10)
-        val gbc = GridBagConstraints()
 
-        // Workflow ID label and field
-        gbc.gridx = 0
-        gbc.gridy = 0
-        gbc.anchor = GridBagConstraints.WEST
-        gbc.insets = JBUI.insets(2)
-        panel.add(JBLabel("Workflow ID:"), gbc)
-
-        gbc.gridx = 1
-        gbc.fill = GridBagConstraints.HORIZONTAL
-        gbc.weightx = 1.0
+        // Row 1: Workflow ID label + field + browse button
+        val row1 = JBPanel<JBPanel<*>>(FlowLayout(FlowLayout.LEFT, 5, 2))
+        row1.add(JBLabel("Workflow ID:"))
         workflowIdField.toolTipText = "Enter the workflow ID to inspect"
-        panel.add(workflowIdField, gbc)
+        row1.add(workflowIdField)
+        browseButton.toolTipText = "Browse recent workflows"
+        browseButton.addActionListener { browseWorkflows() }
+        row1.add(browseButton)
+        panel.add(row1)
 
-        // Run ID label and field (optional)
-        gbc.gridx = 2
-        gbc.fill = GridBagConstraints.NONE
-        gbc.weightx = 0.0
-        panel.add(JBLabel("Run ID (optional):"), gbc)
-
-        gbc.gridx = 3
-        gbc.fill = GridBagConstraints.HORIZONTAL
-        gbc.weightx = 0.3
+        // Row 2: Run ID label + field
+        val row2 = JBPanel<JBPanel<*>>(FlowLayout(FlowLayout.LEFT, 5, 2))
+        row2.add(JBLabel("Run ID (optional):"))
         runIdField.toolTipText = "Leave empty to get the latest run"
         runIdField.emptyText.text = "latest"
-        panel.add(runIdField, gbc)
+        row2.add(runIdField)
+        panel.add(row2)
 
-        // Buttons
-        val buttonPanel = JPanel(FlowLayout(FlowLayout.LEFT, 5, 0))
+        // Row 3: Action buttons
+        val row3 = JBPanel<JBPanel<*>>(FlowLayout(FlowLayout.LEFT, 5, 2))
         inspectButton.toolTipText = "Fetch and display workflow execution details"
         inspectButton.addActionListener { loadWorkflow() }
-        buttonPanel.add(inspectButton)
-
+        row3.add(inspectButton)
         refreshButton.toolTipText = "Refresh workflow info"
         refreshButton.addActionListener { refreshWorkflow() }
         refreshButton.isEnabled = false
-        buttonPanel.add(refreshButton)
+        row3.add(refreshButton)
+        panel.add(row3)
 
-        gbc.gridx = 4
-        gbc.fill = GridBagConstraints.NONE
-        gbc.weightx = 0.0
-        panel.add(buttonPanel, gbc)
-
-        // Enter key triggers watch
+        // Enter key triggers inspect
         workflowIdField.addActionListener { loadWorkflow() }
+        runIdField.addActionListener { loadWorkflow() }
 
         return panel
     }
@@ -152,6 +139,51 @@ class WorkflowInspectorPanel(private val project: Project) : JBPanel<WorkflowIns
         currentWorkflowId?.let { workflowId ->
             fetchWorkflowInfo(workflowId, currentRunId)
         }
+    }
+
+    private fun browseWorkflows() {
+        browseButton.isEnabled = false
+        statusLabel.text = "<html><i>Loading recent workflows...</i></html>"
+        statusLabel.isVisible = true
+
+        ProgressManager.getInstance().run(object : Task.Backgroundable(project, "Loading Workflows", true) {
+            override fun run(indicator: ProgressIndicator) {
+                indicator.text = "Connecting to Temporal..."
+                indicator.isIndeterminate = true
+
+                val service = getOrCreateService()
+                val connectResult = service.connect()
+                if (connectResult.isFailure) {
+                    showError("Connection failed: ${connectResult.exceptionOrNull()?.message}")
+                    ApplicationManager.getApplication().invokeLater {
+                        browseButton.isEnabled = true
+                    }
+                    return
+                }
+
+                indicator.text = "Fetching recent workflows..."
+                val result = service.listWorkflows(20)
+
+                ApplicationManager.getApplication().invokeLater {
+                    browseButton.isEnabled = true
+                    statusLabel.isVisible = false
+
+                    if (result.isSuccess) {
+                        val workflows = result.getOrNull()!!
+                        val dialog = WorkflowChooserDialog(project, workflows)
+                        if (dialog.showAndGet()) {
+                            dialog.selectedWorkflow?.let { selected ->
+                                workflowIdField.text = selected.workflowId
+                                runIdField.text = selected.runId
+                                loadWorkflow()
+                            }
+                        }
+                    } else {
+                        showError(result.exceptionOrNull()?.message ?: "Failed to load workflows")
+                    }
+                }
+            }
+        })
     }
 
     private fun fetchWorkflowInfo(workflowId: String, runId: String?) {
