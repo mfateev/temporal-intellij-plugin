@@ -103,12 +103,13 @@ class WorkflowInspectorPanel(private val project: Project) : JBPanel<WorkflowIns
         gbc.gridx = 2
         gbc.fill = GridBagConstraints.NONE
         gbc.weightx = 0.0
-        panel.add(JBLabel("Run ID:"), gbc)
+        panel.add(JBLabel("Run ID (optional):"), gbc)
 
         gbc.gridx = 3
         gbc.fill = GridBagConstraints.HORIZONTAL
         gbc.weightx = 0.3
-        runIdField.toolTipText = "Optional: specific run ID"
+        runIdField.toolTipText = "Leave empty to get the latest run"
+        runIdField.emptyText.text = "latest"
         panel.add(runIdField, gbc)
 
         // Buttons
