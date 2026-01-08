@@ -19,6 +19,12 @@
                     anchor="right"
                     factoryClass="io.temporal.intellij.toolwindow.TemporalToolWindowFactory"
                     icon="/icons/temporal_13.png"/>
+        <projectConfigurable
+                parentId="tools"
+                instance="io.temporal.intellij.settings.TemporalSettingsConfigurable"
+                id="io.temporal.intellij.settings"
+                displayName="Temporal"
+                nonDefaultProject="true"/>
     </extensions>
 
     <actions>
