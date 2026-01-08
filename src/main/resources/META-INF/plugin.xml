@@ -1,0 +1,26 @@
+<idea-plugin>
+    <id>io.temporal.intellij</id>
+    <name>Temporal</name>
+    <vendor email="support@temporal.io" url="https://temporal.io">Temporal Technologies</vendor>
+
+    <description><![CDATA[
+    Temporal plugin for JetBrains IDEs.
+
+    <h2>Features</h2>
+    <ul>
+        <li>Hello World action to verify plugin installation</li>
+    </ul>
+    ]]></description>
+
+    <depends>com.intellij.modules.platform</depends>
+
+    <actions>
+        <group id="Temporal.ToolsMenu" text="Temporal" description="Temporal tools" popup="true">
+            <add-to-group group-id="ToolsMenu" anchor="last"/>
+            <action id="Temporal.HelloWorld"
+                    class="io.temporal.intellij.HelloWorldAction"
+                    text="Hello World"
+                    description="Say hello from Temporal plugin"/>
+        </group>
+    </actions>
+</idea-plugin>
