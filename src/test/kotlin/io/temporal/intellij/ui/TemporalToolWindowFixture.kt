@@ -35,8 +35,8 @@ class TemporalToolWindowFixture(
     val workflowIdField
         get() = textField(byXpath("//div[@class='JBTextField' or @class='JTextField']"), Duration.ofSeconds(2))
 
-    val watchButton
-        get() = button(byXpath("//div[@class='JButton' and @text='Watch']"), Duration.ofSeconds(2))
+    val inspectButton
+        get() = button(byXpath("//div[@class='JButton' and @text='Inspect']"), Duration.ofSeconds(2))
 
     val refreshButton
         get() = actionButton(byXpath("//div[@myicon='refresh.svg' or contains(@tooltiptext, 'Refresh')]"), Duration.ofSeconds(2))

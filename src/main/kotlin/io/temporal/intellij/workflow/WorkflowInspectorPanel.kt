@@ -32,9 +32,9 @@ class WorkflowInspectorPanel(private val project: Project) : JBPanel<WorkflowIns
     private var workflowService: WorkflowService? = null
 
     // Input components
-    private val workflowIdField = JBTextField(30)
-    private val runIdField = JBTextField(20)
-    private val watchButton = JButton("Watch")
+    private val workflowIdField = JBTextField(50)
+    private val runIdField = JBTextField(30)
+    private val inspectButton = JButton("Inspect")
     private val refreshButton = JButton(AllIcons.Actions.Refresh)
 
     // Display components
@@ -114,9 +114,9 @@ class WorkflowInspectorPanel(private val project: Project) : JBPanel<WorkflowIns
 
         // Buttons
         val buttonPanel = JPanel(FlowLayout(FlowLayout.LEFT, 5, 0))
-        watchButton.toolTipText = "Load workflow execution info"
-        watchButton.addActionListener { loadWorkflow() }
-        buttonPanel.add(watchButton)
+        inspectButton.toolTipText = "Fetch and display workflow execution details"
+        inspectButton.addActionListener { loadWorkflow() }
+        buttonPanel.add(inspectButton)
 
         refreshButton.toolTipText = "Refresh workflow info"
         refreshButton.addActionListener { refreshWorkflow() }
@@ -158,7 +158,7 @@ class WorkflowInspectorPanel(private val project: Project) : JBPanel<WorkflowIns
         statusLabel.text = "<html><i>Loading workflow...</i></html>"
         statusLabel.isVisible = true
         setDetailsVisible(false)
-        watchButton.isEnabled = false
+        inspectButton.isEnabled = false
         refreshButton.isEnabled = false
 
         ProgressManager.getInstance().run(object : Task.Backgroundable(project, "Loading Workflow", true) {
@@ -178,7 +178,7 @@ class WorkflowInspectorPanel(private val project: Project) : JBPanel<WorkflowIns
                 val result = service.describeWorkflow(workflowId, runId)
 
                 ApplicationManager.getApplication().invokeLater {
-                    watchButton.isEnabled = true
+                    inspectButton.isEnabled = true
                     if (result.isSuccess) {
                         displayWorkflowInfo(result.getOrNull()!!)
                         refreshButton.isEnabled = true
@@ -208,7 +208,7 @@ class WorkflowInspectorPanel(private val project: Project) : JBPanel<WorkflowIns
             statusLabel.text = "<html><font color='red'>$message</font></html>"
             statusLabel.isVisible = true
             setDetailsVisible(false)
-            watchButton.isEnabled = true
+            inspectButton.isEnabled = true
             refreshButton.isEnabled = currentWorkflowId != null
         }
     }
