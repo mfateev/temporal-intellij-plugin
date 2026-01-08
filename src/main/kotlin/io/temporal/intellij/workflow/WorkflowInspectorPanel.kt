@@ -40,10 +40,11 @@ class WorkflowInspectorPanel(private val project: Project) : JBPanel<WorkflowIns
 
     // Display components
     private val statusLabel = JBLabel()
+    private val tabbedPane = JTabbedPane()
     private val executionInfoPanel = ExecutionInfoPanel()
     private val pendingActivitiesPanel = PendingActivitiesPanel()
     private val pendingChildrenPanel = PendingChildrenPanel()
-    private val eventHistoryPanel = EventHistoryPanel()
+    private val eventHistoryTreePanel = EventHistoryTreePanel()
     private val queryPanel = QueryPanel(project)
 
     // Auto-refresh components
@@ -68,26 +69,29 @@ class WorkflowInspectorPanel(private val project: Project) : JBPanel<WorkflowIns
         statusLabel.border = JBUI.Borders.empty(5, 0)
         statusLabel.isVisible = false
 
-        // Content panel with scroll
+        // Content panel with tabs
         val contentPanel = JBPanel<JBPanel<*>>(BorderLayout())
         contentPanel.add(statusLabel, BorderLayout.NORTH)
 
-        val detailsPanel = JBPanel<JBPanel<*>>()
-        detailsPanel.layout = BoxLayout(detailsPanel, BoxLayout.Y_AXIS)
-        detailsPanel.add(executionInfoPanel)
-        detailsPanel.add(Box.createVerticalStrut(10))
-        detailsPanel.add(pendingActivitiesPanel)
-        detailsPanel.add(Box.createVerticalStrut(10))
-        detailsPanel.add(pendingChildrenPanel)
-        detailsPanel.add(Box.createVerticalStrut(10))
-        detailsPanel.add(eventHistoryPanel)
-        detailsPanel.add(Box.createVerticalStrut(10))
-        detailsPanel.add(queryPanel)
-        detailsPanel.add(Box.createVerticalGlue())
+        // Overview tab - execution info and pending items
+        val overviewPanel = JBPanel<JBPanel<*>>()
+        overviewPanel.layout = BoxLayout(overviewPanel, BoxLayout.Y_AXIS)
+        overviewPanel.add(executionInfoPanel)
+        overviewPanel.add(Box.createVerticalStrut(10))
+        overviewPanel.add(pendingActivitiesPanel)
+        overviewPanel.add(Box.createVerticalStrut(10))
+        overviewPanel.add(pendingChildrenPanel)
+        overviewPanel.add(Box.createVerticalGlue())
 
-        val scrollPane = JBScrollPane(detailsPanel)
-        scrollPane.border = JBUI.Borders.empty()
-        contentPanel.add(scrollPane, BorderLayout.CENTER)
+        val overviewScrollPane = JBScrollPane(overviewPanel)
+        overviewScrollPane.border = JBUI.Borders.empty()
+
+        // Add tabs
+        tabbedPane.addTab("Overview", overviewScrollPane)
+        tabbedPane.addTab("History", eventHistoryTreePanel)
+        tabbedPane.addTab("Query", queryPanel)
+
+        contentPanel.add(tabbedPane, BorderLayout.CENTER)
 
         add(contentPanel, BorderLayout.CENTER)
 
@@ -263,7 +267,7 @@ class WorkflowInspectorPanel(private val project: Project) : JBPanel<WorkflowIns
             ApplicationManager.getApplication().invokeLater {
                 if (result.isSuccess) {
                     val historyPage = result.getOrNull()!!
-                    eventHistoryPanel.update(historyPage.events)
+                    eventHistoryTreePanel.update(historyPage.events)
                 }
             }
         }
@@ -399,10 +403,10 @@ class WorkflowInspectorPanel(private val project: Project) : JBPanel<WorkflowIns
                 ApplicationManager.getApplication().invokeLater {
                     if (result.isSuccess) {
                         val historyPage = result.getOrNull()!!
-                        eventHistoryPanel.update(historyPage.events)
+                        eventHistoryTreePanel.update(historyPage.events)
                     } else {
                         // Show error in status but don't fail the whole display
-                        eventHistoryPanel.clear()
+                        eventHistoryTreePanel.clear()
                     }
                 }
             }
@@ -426,11 +430,7 @@ class WorkflowInspectorPanel(private val project: Project) : JBPanel<WorkflowIns
     }
 
     private fun setDetailsVisible(visible: Boolean) {
-        executionInfoPanel.isVisible = visible
-        pendingActivitiesPanel.isVisible = visible
-        pendingChildrenPanel.isVisible = visible
-        eventHistoryPanel.isVisible = visible
-        queryPanel.isVisible = visible
+        tabbedPane.isVisible = visible
     }
 
     fun dispose() {
