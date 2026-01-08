@@ -42,6 +42,8 @@ class WorkflowInspectorPanel(private val project: Project) : JBPanel<WorkflowIns
     private val executionInfoPanel = ExecutionInfoPanel()
     private val pendingActivitiesPanel = PendingActivitiesPanel()
     private val pendingChildrenPanel = PendingChildrenPanel()
+    private val eventHistoryPanel = EventHistoryPanel()
+    private val queryPanel = QueryPanel(project)
 
     // State
     private var currentWorkflowId: String? = null
@@ -69,6 +71,10 @@ class WorkflowInspectorPanel(private val project: Project) : JBPanel<WorkflowIns
         detailsPanel.add(pendingActivitiesPanel)
         detailsPanel.add(Box.createVerticalStrut(10))
         detailsPanel.add(pendingChildrenPanel)
+        detailsPanel.add(Box.createVerticalStrut(10))
+        detailsPanel.add(eventHistoryPanel)
+        detailsPanel.add(Box.createVerticalStrut(10))
+        detailsPanel.add(queryPanel)
         detailsPanel.add(Box.createVerticalGlue())
 
         val scrollPane = JBScrollPane(detailsPanel)
@@ -236,6 +242,36 @@ class WorkflowInspectorPanel(private val project: Project) : JBPanel<WorkflowIns
         executionInfoPanel.update(info)
         pendingActivitiesPanel.update(info.pendingActivities)
         pendingChildrenPanel.update(info.pendingChildren)
+
+        // Set up query panel context
+        queryPanel.setWorkflowContext(currentWorkflowId, currentRunId, workflowService)
+
+        // Load event history in background
+        loadEventHistory()
+    }
+
+    private fun loadEventHistory() {
+        val workflowId = currentWorkflowId ?: return
+        val service = workflowService ?: return
+
+        ProgressManager.getInstance().run(object : Task.Backgroundable(project, "Loading Event History", true) {
+            override fun run(indicator: ProgressIndicator) {
+                indicator.text = "Fetching event history..."
+                indicator.isIndeterminate = true
+
+                val result = service.getWorkflowHistory(workflowId, currentRunId)
+
+                ApplicationManager.getApplication().invokeLater {
+                    if (result.isSuccess) {
+                        val historyPage = result.getOrNull()!!
+                        eventHistoryPanel.update(historyPage.events)
+                    } else {
+                        // Show error in status but don't fail the whole display
+                        eventHistoryPanel.clear()
+                    }
+                }
+            }
+        })
     }
 
     private fun showError(message: String) {
@@ -252,6 +288,8 @@ class WorkflowInspectorPanel(private val project: Project) : JBPanel<WorkflowIns
         executionInfoPanel.isVisible = visible
         pendingActivitiesPanel.isVisible = visible
         pendingChildrenPanel.isVisible = visible
+        eventHistoryPanel.isVisible = visible
+        queryPanel.isVisible = visible
     }
 
     fun dispose() {

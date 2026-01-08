@@ -6,11 +6,18 @@ import io.grpc.Status
 import io.grpc.StatusRuntimeException
 import io.grpc.netty.shaded.io.grpc.netty.GrpcSslContexts
 import io.grpc.netty.shaded.io.grpc.netty.NettyChannelBuilder
+import com.google.protobuf.ByteString
+import io.temporal.api.common.v1.Payloads
 import io.temporal.api.common.v1.WorkflowExecution
+import io.temporal.api.enums.v1.EventType
 import io.temporal.api.enums.v1.WorkflowExecutionStatus
+import io.temporal.api.history.v1.HistoryEvent
+import io.temporal.api.query.v1.WorkflowQuery
 import io.temporal.api.workflowservice.v1.DescribeWorkflowExecutionRequest
 import io.temporal.api.workflowservice.v1.DescribeWorkflowExecutionResponse
+import io.temporal.api.workflowservice.v1.GetWorkflowExecutionHistoryRequest
 import io.temporal.api.workflowservice.v1.ListWorkflowExecutionsRequest
+import io.temporal.api.workflowservice.v1.QueryWorkflowRequest
 import io.temporal.api.workflowservice.v1.WorkflowServiceGrpc
 import io.temporal.intellij.settings.TemporalSettings
 import java.io.File
@@ -158,6 +165,295 @@ class WorkflowService(private val settings: TemporalSettings.State) {
             Result.failure(WorkflowServiceException(message, e))
         } catch (e: Exception) {
             Result.failure(WorkflowServiceException("Error: ${e.message}", e))
+        }
+    }
+
+    /**
+     * Get workflow execution history with optional pagination.
+     */
+    fun getWorkflowHistory(
+        workflowId: String,
+        runId: String? = null,
+        pageSize: Int = 100,
+        nextPageToken: ByteString = ByteString.EMPTY
+    ): Result<WorkflowHistoryPage> {
+        val stub = this.stub ?: return Result.failure(IllegalStateException("Not connected"))
+
+        return try {
+            val executionBuilder = WorkflowExecution.newBuilder()
+                .setWorkflowId(workflowId)
+            if (!runId.isNullOrEmpty()) {
+                executionBuilder.setRunId(runId)
+            }
+
+            val request = GetWorkflowExecutionHistoryRequest.newBuilder()
+                .setNamespace(settings.namespace)
+                .setExecution(executionBuilder.build())
+                .setMaximumPageSize(pageSize)
+                .setNextPageToken(nextPageToken)
+                .setWaitNewEvent(false)
+                .build()
+
+            val response = stub.getWorkflowExecutionHistory(request)
+
+            val events = response.history.eventsList.map { event ->
+                parseHistoryEvent(event)
+            }
+
+            Result.success(WorkflowHistoryPage(
+                events = events,
+                nextPageToken = response.nextPageToken
+            ))
+        } catch (e: StatusRuntimeException) {
+            val message = when (e.status.code) {
+                Status.Code.NOT_FOUND -> "Workflow not found: $workflowId"
+                Status.Code.UNAVAILABLE -> "Server unavailable"
+                Status.Code.DEADLINE_EXCEEDED -> "Request timed out"
+                Status.Code.PERMISSION_DENIED -> "Permission denied"
+                Status.Code.UNAUTHENTICATED -> "Authentication failed"
+                else -> "Error: ${e.status.description ?: e.message}"
+            }
+            Result.failure(WorkflowServiceException(message, e))
+        } catch (e: Exception) {
+            Result.failure(WorkflowServiceException("Error: ${e.message}", e))
+        }
+    }
+
+    /**
+     * Query a workflow to retrieve its current state.
+     */
+    fun queryWorkflow(
+        workflowId: String,
+        runId: String? = null,
+        queryType: String,
+        queryArgs: String? = null
+    ): Result<String> {
+        val stub = this.stub ?: return Result.failure(IllegalStateException("Not connected"))
+
+        return try {
+            val executionBuilder = WorkflowExecution.newBuilder()
+                .setWorkflowId(workflowId)
+            if (!runId.isNullOrEmpty()) {
+                executionBuilder.setRunId(runId)
+            }
+
+            val queryBuilder = WorkflowQuery.newBuilder()
+                .setQueryType(queryType)
+
+            // Add query arguments if provided
+            if (!queryArgs.isNullOrEmpty()) {
+                val payload = io.temporal.api.common.v1.Payload.newBuilder()
+                    .putMetadata("encoding", ByteString.copyFromUtf8("json/plain"))
+                    .setData(ByteString.copyFromUtf8(queryArgs))
+                    .build()
+                queryBuilder.setQueryArgs(Payloads.newBuilder().addPayloads(payload).build())
+            }
+
+            val request = QueryWorkflowRequest.newBuilder()
+                .setNamespace(settings.namespace)
+                .setExecution(executionBuilder.build())
+                .setQuery(queryBuilder.build())
+                .build()
+
+            val response = stub.queryWorkflow(request)
+
+            // Decode the result
+            val result = if (response.hasQueryResult() && response.queryResult.payloadsCount > 0) {
+                response.queryResult.payloadsList.joinToString("\n") { payload ->
+                    tryDecodePayload(payload) ?: "<binary data>"
+                }
+            } else {
+                "<no result>"
+            }
+
+            Result.success(result)
+        } catch (e: StatusRuntimeException) {
+            val message = when (e.status.code) {
+                Status.Code.NOT_FOUND -> "Workflow not found: $workflowId"
+                Status.Code.UNAVAILABLE -> "Server unavailable"
+                Status.Code.DEADLINE_EXCEEDED -> "Request timed out"
+                Status.Code.PERMISSION_DENIED -> "Permission denied"
+                Status.Code.UNAUTHENTICATED -> "Authentication failed"
+                Status.Code.INVALID_ARGUMENT -> "Query failed: ${e.status.description}"
+                else -> "Error: ${e.status.description ?: e.message}"
+            }
+            Result.failure(WorkflowServiceException(message, e))
+        } catch (e: Exception) {
+            Result.failure(WorkflowServiceException("Error: ${e.message}", e))
+        }
+    }
+
+    /**
+     * Get workflow stack trace using the built-in __stack_trace query.
+     */
+    fun getStackTrace(workflowId: String, runId: String? = null): Result<String> {
+        return queryWorkflow(workflowId, runId, "__stack_trace")
+    }
+
+    private fun parseHistoryEvent(event: HistoryEvent): WorkflowHistoryEvent {
+        val timestamp = if (event.hasEventTime()) {
+            Instant.ofEpochSecond(event.eventTime.seconds, event.eventTime.nanos.toLong())
+        } else null
+
+        // Extract event-specific details
+        val details = extractEventDetails(event)
+
+        return WorkflowHistoryEvent(
+            eventId = event.eventId,
+            eventType = event.eventType.name,
+            eventCategory = categorizeEvent(event.eventType),
+            timestamp = timestamp,
+            details = details
+        )
+    }
+
+    private fun categorizeEvent(eventType: EventType): EventCategory {
+        return when (eventType) {
+            EventType.EVENT_TYPE_WORKFLOW_EXECUTION_STARTED,
+            EventType.EVENT_TYPE_WORKFLOW_EXECUTION_COMPLETED,
+            EventType.EVENT_TYPE_WORKFLOW_EXECUTION_FAILED,
+            EventType.EVENT_TYPE_WORKFLOW_EXECUTION_TIMED_OUT,
+            EventType.EVENT_TYPE_WORKFLOW_EXECUTION_CANCELED,
+            EventType.EVENT_TYPE_WORKFLOW_EXECUTION_TERMINATED,
+            EventType.EVENT_TYPE_WORKFLOW_EXECUTION_CONTINUED_AS_NEW -> EventCategory.WORKFLOW
+
+            EventType.EVENT_TYPE_WORKFLOW_TASK_SCHEDULED,
+            EventType.EVENT_TYPE_WORKFLOW_TASK_STARTED,
+            EventType.EVENT_TYPE_WORKFLOW_TASK_COMPLETED,
+            EventType.EVENT_TYPE_WORKFLOW_TASK_FAILED,
+            EventType.EVENT_TYPE_WORKFLOW_TASK_TIMED_OUT -> EventCategory.WORKFLOW_TASK
+
+            EventType.EVENT_TYPE_ACTIVITY_TASK_SCHEDULED,
+            EventType.EVENT_TYPE_ACTIVITY_TASK_STARTED,
+            EventType.EVENT_TYPE_ACTIVITY_TASK_COMPLETED,
+            EventType.EVENT_TYPE_ACTIVITY_TASK_FAILED,
+            EventType.EVENT_TYPE_ACTIVITY_TASK_TIMED_OUT,
+            EventType.EVENT_TYPE_ACTIVITY_TASK_CANCEL_REQUESTED,
+            EventType.EVENT_TYPE_ACTIVITY_TASK_CANCELED -> EventCategory.ACTIVITY
+
+            EventType.EVENT_TYPE_TIMER_STARTED,
+            EventType.EVENT_TYPE_TIMER_FIRED,
+            EventType.EVENT_TYPE_TIMER_CANCELED -> EventCategory.TIMER
+
+            EventType.EVENT_TYPE_WORKFLOW_EXECUTION_SIGNALED -> EventCategory.SIGNAL
+
+            EventType.EVENT_TYPE_START_CHILD_WORKFLOW_EXECUTION_INITIATED,
+            EventType.EVENT_TYPE_CHILD_WORKFLOW_EXECUTION_STARTED,
+            EventType.EVENT_TYPE_CHILD_WORKFLOW_EXECUTION_COMPLETED,
+            EventType.EVENT_TYPE_CHILD_WORKFLOW_EXECUTION_FAILED,
+            EventType.EVENT_TYPE_CHILD_WORKFLOW_EXECUTION_CANCELED,
+            EventType.EVENT_TYPE_CHILD_WORKFLOW_EXECUTION_TIMED_OUT,
+            EventType.EVENT_TYPE_CHILD_WORKFLOW_EXECUTION_TERMINATED -> EventCategory.CHILD_WORKFLOW
+
+            EventType.EVENT_TYPE_WORKFLOW_EXECUTION_UPDATE_ACCEPTED,
+            EventType.EVENT_TYPE_WORKFLOW_EXECUTION_UPDATE_COMPLETED,
+            EventType.EVENT_TYPE_WORKFLOW_EXECUTION_UPDATE_REJECTED -> EventCategory.UPDATE
+
+            else -> EventCategory.OTHER
+        }
+    }
+
+    private fun extractEventDetails(event: HistoryEvent): Map<String, String> {
+        val details = mutableMapOf<String, String>()
+
+        when (event.eventType) {
+            EventType.EVENT_TYPE_WORKFLOW_EXECUTION_STARTED -> {
+                if (event.hasWorkflowExecutionStartedEventAttributes()) {
+                    val attrs = event.workflowExecutionStartedEventAttributes
+                    details["workflowType"] = attrs.workflowType.name
+                    details["taskQueue"] = attrs.taskQueue.name
+                    if (attrs.hasInput() && attrs.input.payloadsCount > 0) {
+                        details["input"] = tryDecodePayload(attrs.input.getPayloads(0)) ?: "<binary>"
+                    }
+                }
+            }
+            EventType.EVENT_TYPE_WORKFLOW_EXECUTION_COMPLETED -> {
+                if (event.hasWorkflowExecutionCompletedEventAttributes()) {
+                    val attrs = event.workflowExecutionCompletedEventAttributes
+                    if (attrs.hasResult() && attrs.result.payloadsCount > 0) {
+                        details["result"] = tryDecodePayload(attrs.result.getPayloads(0)) ?: "<binary>"
+                    }
+                }
+            }
+            EventType.EVENT_TYPE_WORKFLOW_EXECUTION_FAILED -> {
+                if (event.hasWorkflowExecutionFailedEventAttributes()) {
+                    val attrs = event.workflowExecutionFailedEventAttributes
+                    if (attrs.hasFailure()) {
+                        details["failure"] = attrs.failure.message
+                    }
+                }
+            }
+            EventType.EVENT_TYPE_ACTIVITY_TASK_SCHEDULED -> {
+                if (event.hasActivityTaskScheduledEventAttributes()) {
+                    val attrs = event.activityTaskScheduledEventAttributes
+                    details["activityType"] = attrs.activityType.name
+                    details["activityId"] = attrs.activityId
+                    details["taskQueue"] = attrs.taskQueue.name
+                }
+            }
+            EventType.EVENT_TYPE_ACTIVITY_TASK_COMPLETED -> {
+                if (event.hasActivityTaskCompletedEventAttributes()) {
+                    val attrs = event.activityTaskCompletedEventAttributes
+                    if (attrs.hasResult() && attrs.result.payloadsCount > 0) {
+                        details["result"] = tryDecodePayload(attrs.result.getPayloads(0)) ?: "<binary>"
+                    }
+                }
+            }
+            EventType.EVENT_TYPE_ACTIVITY_TASK_FAILED -> {
+                if (event.hasActivityTaskFailedEventAttributes()) {
+                    val attrs = event.activityTaskFailedEventAttributes
+                    if (attrs.hasFailure()) {
+                        details["failure"] = attrs.failure.message
+                    }
+                }
+            }
+            EventType.EVENT_TYPE_TIMER_STARTED -> {
+                if (event.hasTimerStartedEventAttributes()) {
+                    val attrs = event.timerStartedEventAttributes
+                    details["timerId"] = attrs.timerId
+                    if (attrs.hasStartToFireTimeout()) {
+                        val duration = Duration.ofSeconds(
+                            attrs.startToFireTimeout.seconds,
+                            attrs.startToFireTimeout.nanos.toLong()
+                        )
+                        details["duration"] = formatDuration(duration)
+                    }
+                }
+            }
+            EventType.EVENT_TYPE_TIMER_FIRED -> {
+                if (event.hasTimerFiredEventAttributes()) {
+                    details["timerId"] = event.timerFiredEventAttributes.timerId
+                }
+            }
+            EventType.EVENT_TYPE_WORKFLOW_EXECUTION_SIGNALED -> {
+                if (event.hasWorkflowExecutionSignaledEventAttributes()) {
+                    val attrs = event.workflowExecutionSignaledEventAttributes
+                    details["signalName"] = attrs.signalName
+                    if (attrs.hasInput() && attrs.input.payloadsCount > 0) {
+                        details["input"] = tryDecodePayload(attrs.input.getPayloads(0)) ?: "<binary>"
+                    }
+                }
+            }
+            EventType.EVENT_TYPE_START_CHILD_WORKFLOW_EXECUTION_INITIATED -> {
+                if (event.hasStartChildWorkflowExecutionInitiatedEventAttributes()) {
+                    val attrs = event.startChildWorkflowExecutionInitiatedEventAttributes
+                    details["workflowType"] = attrs.workflowType.name
+                    details["workflowId"] = attrs.workflowId
+                }
+            }
+            else -> {
+                // No specific details for other events
+            }
+        }
+
+        return details
+    }
+
+    private fun formatDuration(duration: Duration): String {
+        return when {
+            duration.toHours() > 0 -> "${duration.toHours()}h ${duration.toMinutesPart()}m"
+            duration.toMinutes() > 0 -> "${duration.toMinutes()}m ${duration.toSecondsPart()}s"
+            else -> "${duration.seconds}s"
         }
     }
 
@@ -325,3 +621,29 @@ data class WorkflowListItem(
     val status: WorkflowStatus,
     val startTime: Instant?
 )
+
+// Event History data classes
+
+data class WorkflowHistoryPage(
+    val events: List<WorkflowHistoryEvent>,
+    val nextPageToken: ByteString
+)
+
+data class WorkflowHistoryEvent(
+    val eventId: Long,
+    val eventType: String,
+    val eventCategory: EventCategory,
+    val timestamp: Instant?,
+    val details: Map<String, String>
+)
+
+enum class EventCategory {
+    WORKFLOW,
+    WORKFLOW_TASK,
+    ACTIVITY,
+    TIMER,
+    SIGNAL,
+    CHILD_WORKFLOW,
+    UPDATE,
+    OTHER
+}
