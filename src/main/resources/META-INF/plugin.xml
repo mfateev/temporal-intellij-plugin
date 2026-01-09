@@ -36,5 +36,10 @@
                     icon="/icons/temporal_16.png"
                     description="Say hello from Temporal plugin"/>
         </group>
+
+        <!-- Tool window title bar settings action -->
+        <action id="Temporal.OpenSettings"
+                class="io.temporal.intellij.actions.OpenTemporalSettingsAction"
+                icon="AllIcons.General.Settings"/>
     </actions>
 </idea-plugin>

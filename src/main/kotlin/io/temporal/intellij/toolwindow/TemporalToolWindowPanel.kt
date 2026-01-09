@@ -1,7 +1,6 @@
 package io.temporal.intellij.toolwindow
 
 import com.intellij.openapi.Disposable
-import com.intellij.openapi.options.ShowSettingsUtil
 import com.intellij.openapi.project.Project
 import com.intellij.ui.components.JBLabel
 import com.intellij.ui.components.JBPanel
@@ -9,7 +8,6 @@ import com.intellij.util.ui.JBUI
 import io.temporal.intellij.settings.TemporalSettings
 import io.temporal.intellij.workflow.WorkflowInspectorPanel
 import java.awt.BorderLayout
-import javax.swing.JButton
 import javax.swing.JPanel
 
 class TemporalToolWindowPanel(private val project: Project) : JBPanel<TemporalToolWindowPanel>(BorderLayout()), Disposable {
@@ -33,17 +31,10 @@ class TemporalToolWindowPanel(private val project: Project) : JBPanel<TemporalTo
         updateConnectionInfo()
         panel.add(connectionInfoLabel, BorderLayout.CENTER)
 
-        val settingsButton = JButton("Settings")
-        settingsButton.addActionListener {
-            ShowSettingsUtil.getInstance().showSettingsDialog(project, "Temporal")
-            updateConnectionInfo()
-        }
-        panel.add(settingsButton, BorderLayout.EAST)
-
         return panel
     }
 
-    private fun updateConnectionInfo() {
+    fun updateConnectionInfo() {
         val state = settings.state
         val tlsIcon = if (state.tlsEnabled) "🔒" else ""
         connectionInfoLabel.text = "<html><b>${state.address}</b> · ${state.namespace} $tlsIcon</html>"

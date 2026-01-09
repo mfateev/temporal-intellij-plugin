@@ -433,6 +433,14 @@ class WorkflowInspectorPanel(private val project: Project) : JBPanel<WorkflowIns
         tabbedPane.isVisible = visible
     }
 
+    fun expandAllHistory() {
+        eventHistoryTreePanel.expandAll()
+    }
+
+    fun collapseAllHistory() {
+        eventHistoryTreePanel.collapseAll()
+    }
+
     fun dispose() {
         stopAutoRefreshTimer()
         workflowService?.disconnect()

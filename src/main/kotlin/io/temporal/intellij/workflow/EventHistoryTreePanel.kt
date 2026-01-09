@@ -1,5 +1,6 @@
 package io.temporal.intellij.workflow
 
+import com.intellij.icons.AllIcons
 import com.intellij.ui.JBColor
 import com.intellij.ui.components.JBLabel
 import com.intellij.ui.components.JBPanel
@@ -8,6 +9,7 @@ import com.intellij.ui.treeStructure.Tree
 import com.intellij.util.ui.JBUI
 import java.awt.BorderLayout
 import java.awt.Component
+import java.awt.Dimension
 import java.awt.FlowLayout
 import java.time.Instant
 import java.time.ZoneId
@@ -37,19 +39,23 @@ class EventHistoryTreePanel : JBPanel<EventHistoryTreePanel>(BorderLayout()) {
         val headerPanel = JBPanel<JBPanel<*>>(BorderLayout())
         headerPanel.add(headerLabel, BorderLayout.WEST)
 
-        val controlsPanel = JBPanel<JBPanel<*>>(FlowLayout(FlowLayout.RIGHT, 5, 0))
+        val controlsPanel = JBPanel<JBPanel<*>>(FlowLayout(FlowLayout.RIGHT, 2, 0))
 
-        // Expand/Collapse buttons
-        val expandAllButton = JButton("Expand All")
+        // Expand/Collapse icon buttons
+        val expandAllButton = JButton(AllIcons.Actions.Expandall)
+        expandAllButton.toolTipText = "Expand All"
+        expandAllButton.preferredSize = Dimension(28, 28)
         expandAllButton.addActionListener { expandAll() }
         controlsPanel.add(expandAllButton)
 
-        val collapseAllButton = JButton("Collapse All")
+        val collapseAllButton = JButton(AllIcons.Actions.Collapseall)
+        collapseAllButton.toolTipText = "Collapse All"
+        collapseAllButton.preferredSize = Dimension(28, 28)
         collapseAllButton.addActionListener { collapseAll() }
         controlsPanel.add(collapseAllButton)
 
         // Separator
-        controlsPanel.add(JBLabel("  |  "))
+        controlsPanel.add(Box.createHorizontalStrut(10))
 
         // Filter dropdown
         controlsPanel.add(JBLabel("Filter:"))
