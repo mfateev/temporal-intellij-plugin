@@ -132,15 +132,23 @@ class WorkflowService(private val settings: TemporalSettings.State) {
 
     /**
      * List recent workflow executions.
+     * @param pageSize Maximum number of workflows to return
+     * @param excludeChildren If true, only returns root workflows (those without a parent)
      */
-    fun listWorkflows(pageSize: Int = 20): Result<List<WorkflowListItem>> {
+    fun listWorkflows(pageSize: Int = 20, excludeChildren: Boolean = true): Result<List<WorkflowListItem>> {
         val stub = this.stub ?: return Result.failure(IllegalStateException("Not connected"))
 
         return try {
-            val request = ListWorkflowExecutionsRequest.newBuilder()
+            val requestBuilder = ListWorkflowExecutionsRequest.newBuilder()
                 .setNamespace(settings.namespace)
                 .setPageSize(pageSize)
-                .build()
+
+            // Filter to exclude child workflows if requested
+            if (excludeChildren) {
+                requestBuilder.setQuery("ParentWorkflowId IS NULL")
+            }
+
+            val request = requestBuilder.build()
 
             val response = stub.listWorkflowExecutions(request)
 

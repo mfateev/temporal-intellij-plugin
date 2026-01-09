@@ -314,7 +314,7 @@ class WorkflowInspectorPanel(private val project: Project) : JBPanel<WorkflowIns
 
                     if (result.isSuccess) {
                         val workflows = result.getOrNull()!!
-                        val dialog = WorkflowChooserDialog(project, workflows)
+                        val dialog = WorkflowChooserDialog(project, workflows, service)
                         if (dialog.showAndGet()) {
                             dialog.selectedWorkflow?.let { selected ->
                                 workflowIdField.text = selected.workflowId

@@ -1,7 +1,12 @@
 package io.temporal.intellij.workflow
 
+import com.intellij.openapi.application.ApplicationManager
+import com.intellij.openapi.progress.ProgressIndicator
+import com.intellij.openapi.progress.ProgressManager
+import com.intellij.openapi.progress.Task
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.ui.DialogWrapper
+import com.intellij.ui.components.JBCheckBox
 import com.intellij.ui.components.JBLabel
 import com.intellij.ui.components.JBScrollPane
 import com.intellij.ui.table.JBTable
@@ -19,12 +24,15 @@ import javax.swing.table.DefaultTableCellRenderer
  * Dialog for choosing a workflow from a list of recent executions.
  */
 class WorkflowChooserDialog(
-    project: Project,
-    private val workflows: List<WorkflowListItem>
+    private val project: Project,
+    initialWorkflows: List<WorkflowListItem>,
+    private val workflowService: WorkflowService
 ) : DialogWrapper(project, true) {
 
+    private var workflows: List<WorkflowListItem> = initialWorkflows
     private val tableModel = WorkflowTableModel(workflows)
     private val table = JBTable(tableModel)
+    private val showChildrenCheckbox = JBCheckBox("Show child workflows", false)
     var selectedWorkflow: WorkflowListItem? = null
         private set
 
@@ -32,6 +40,7 @@ class WorkflowChooserDialog(
         title = "Select Workflow"
         init()
         setupTable()
+        setupCheckbox()
     }
 
     private fun setupTable() {
@@ -63,23 +72,57 @@ class WorkflowChooserDialog(
         }
     }
 
+    private fun setupCheckbox() {
+        showChildrenCheckbox.addActionListener {
+            refreshWorkflows()
+        }
+    }
+
+    private fun refreshWorkflows() {
+        showChildrenCheckbox.isEnabled = false
+        table.isEnabled = false
+
+        ProgressManager.getInstance().run(object : Task.Backgroundable(project, "Loading Workflows...", false) {
+            override fun run(indicator: ProgressIndicator) {
+                val excludeChildren = !showChildrenCheckbox.isSelected
+                val result = workflowService.listWorkflows(20, excludeChildren)
+
+                ApplicationManager.getApplication().invokeLater {
+                    showChildrenCheckbox.isEnabled = true
+                    table.isEnabled = true
+
+                    if (result.isSuccess) {
+                        workflows = result.getOrNull()!!
+                        tableModel.updateWorkflows(workflows)
+
+                        if (workflows.isNotEmpty()) {
+                            table.setRowSelectionInterval(0, 0)
+                        }
+                    }
+                }
+            }
+        })
+    }
+
     override fun createCenterPanel(): JComponent {
         val panel = JPanel(BorderLayout())
         panel.border = JBUI.Borders.empty(10)
 
-        if (workflows.isEmpty()) {
-            val emptyLabel = JBLabel("No recent workflows found")
-            emptyLabel.horizontalAlignment = SwingConstants.CENTER
-            panel.add(emptyLabel, BorderLayout.CENTER)
-        } else {
-            val scrollPane = JBScrollPane(table)
-            scrollPane.preferredSize = Dimension(700, 300)
-            panel.add(scrollPane, BorderLayout.CENTER)
+        // Checkbox at the top
+        val topPanel = JPanel(BorderLayout())
+        topPanel.add(showChildrenCheckbox, BorderLayout.WEST)
+        topPanel.border = JBUI.Borders.emptyBottom(5)
+        panel.add(topPanel, BorderLayout.NORTH)
 
-            val infoLabel = JBLabel("Double-click or select and click OK to choose a workflow")
-            infoLabel.border = JBUI.Borders.emptyTop(5)
-            panel.add(infoLabel, BorderLayout.SOUTH)
-        }
+        // Table in center
+        val scrollPane = JBScrollPane(table)
+        scrollPane.preferredSize = Dimension(700, 300)
+        panel.add(scrollPane, BorderLayout.CENTER)
+
+        // Info label at bottom
+        val infoLabel = JBLabel("Double-click or select and click OK to choose a workflow")
+        infoLabel.border = JBUI.Borders.emptyTop(5)
+        panel.add(infoLabel, BorderLayout.SOUTH)
 
         return panel
     }
@@ -98,10 +141,15 @@ class WorkflowChooserDialog(
 /**
  * Table model for workflow list.
  */
-private class WorkflowTableModel(private val workflows: List<WorkflowListItem>) : AbstractTableModel() {
+private class WorkflowTableModel(private var workflows: List<WorkflowListItem>) : AbstractTableModel() {
 
     private val columns = arrayOf("Workflow ID", "Type", "Status", "Started")
     private val dateFormatter = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss")
+
+    fun updateWorkflows(newWorkflows: List<WorkflowListItem>) {
+        workflows = newWorkflows
+        fireTableDataChanged()
+    }
 
     override fun getRowCount(): Int = workflows.size
 
