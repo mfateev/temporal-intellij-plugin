@@ -189,7 +189,7 @@ private class EventTreeCellRenderer : DefaultTreeCellRenderer() {
                 text = "#${userObject.eventId} [$timeStr] $eventName"
 
                 if (!selected) {
-                    foreground = getColorForCategory(userObject.eventCategory)
+                    foreground = getColorForEvent(userObject)
                 }
 
                 // Set icon based on event category
@@ -214,17 +214,36 @@ private class EventTreeCellRenderer : DefaultTreeCellRenderer() {
             .joinToString(" ") { it.lowercase().replaceFirstChar { c -> c.uppercase() } }
     }
 
-    private fun getColorForCategory(category: EventCategory): JBColor {
-        return when (category) {
-            EventCategory.WORKFLOW -> JBColor(0x4CAF50, 0x81C784) // Green
-            EventCategory.ACTIVITY -> JBColor(0x2196F3, 0x64B5F6) // Blue
-            EventCategory.TIMER -> JBColor(0xFF9800, 0xFFB74D) // Orange
-            EventCategory.SIGNAL -> JBColor(0x9C27B0, 0xBA68C8) // Purple
-            EventCategory.CHILD_WORKFLOW -> JBColor(0x00BCD4, 0x4DD0E1) // Cyan
-            EventCategory.UPDATE -> JBColor(0xE91E63, 0xF06292) // Pink
-            EventCategory.WORKFLOW_TASK -> JBColor(0x607D8B, 0x90A4AE) // Gray
-            EventCategory.OTHER -> JBColor(JBColor.foreground().rgb, JBColor.foreground().rgb)
+    private fun getColorForEvent(event: WorkflowHistoryEvent): JBColor {
+        val eventType = event.eventType
+
+        // Failed events are red
+        if (eventType.contains("FAILED") || eventType.contains("TIMED_OUT") ||
+            eventType.contains("TERMINATED") || eventType.contains("CANCELED")) {
+            return JBColor(0xC62828, 0xEF5350) // Dark red / Light red
         }
+
+        // ActivityTaskStarted with retries (attempt > 1 and has lastFailure) is red
+        if (eventType.contains("ACTIVITY_TASK_STARTED")) {
+            val attempt = event.details["attempt"]?.toIntOrNull() ?: 1
+            val hasLastFailure = event.details.containsKey("lastFailure")
+            if (attempt > 1 && hasLastFailure) {
+                return JBColor(0xC62828, 0xEF5350) // Dark red / Light red
+            }
+        }
+
+        // Completed events are green
+        if (eventType.contains("COMPLETED")) {
+            return JBColor(0x2E7D32, 0x81C784) // Dark green / Light green
+        }
+
+        // Workflow Task events are gray (unless failed - handled above)
+        if (event.eventCategory == EventCategory.WORKFLOW_TASK) {
+            return JBColor(0x757575, 0x9E9E9E) // Gray
+        }
+
+        // Everything else is default foreground (black in light mode, white in dark mode)
+        return JBColor(JBColor.foreground().rgb, JBColor.foreground().rgb)
     }
 
     private fun truncate(text: String, maxLength: Int): String {
