@@ -187,6 +187,30 @@ class WorkflowService(private val settings: TemporalSettings.State) {
         pageSize: Int = 100,
         nextPageToken: ByteString = ByteString.EMPTY
     ): Result<WorkflowHistoryPage> {
+        return getWorkflowHistoryInternal(workflowId, runId, pageSize, nextPageToken, waitNewEvent = false)
+    }
+
+    /**
+     * Long-poll for new workflow history events.
+     * This call blocks until a new event is available or the workflow completes.
+     * Returns the full history including any new events.
+     */
+    fun waitForNewHistoryEvents(
+        workflowId: String,
+        runId: String? = null,
+        pageSize: Int = 100,
+        nextPageToken: ByteString = ByteString.EMPTY
+    ): Result<WorkflowHistoryPage> {
+        return getWorkflowHistoryInternal(workflowId, runId, pageSize, nextPageToken, waitNewEvent = true)
+    }
+
+    private fun getWorkflowHistoryInternal(
+        workflowId: String,
+        runId: String?,
+        pageSize: Int,
+        nextPageToken: ByteString,
+        waitNewEvent: Boolean
+    ): Result<WorkflowHistoryPage> {
         val stub = this.stub ?: return Result.failure(IllegalStateException("Not connected"))
 
         return try {
@@ -201,10 +225,17 @@ class WorkflowService(private val settings: TemporalSettings.State) {
                 .setExecution(executionBuilder.build())
                 .setMaximumPageSize(pageSize)
                 .setNextPageToken(nextPageToken)
-                .setWaitNewEvent(false)
+                .setWaitNewEvent(waitNewEvent)
                 .build()
 
-            val response = stub.getWorkflowExecutionHistory(request)
+            // Use a longer timeout for long polling
+            val stubToUse = if (waitNewEvent) {
+                stub.withDeadlineAfter(70, TimeUnit.SECONDS) // Long poll timeout
+            } else {
+                stub
+            }
+
+            val response = stubToUse.getWorkflowExecutionHistory(request)
 
             val events = response.history.eventsList.map { event ->
                 parseHistoryEvent(event)
@@ -218,9 +249,10 @@ class WorkflowService(private val settings: TemporalSettings.State) {
             val message = when (e.status.code) {
                 Status.Code.NOT_FOUND -> "Workflow not found: $workflowId"
                 Status.Code.UNAVAILABLE -> "Server unavailable"
-                Status.Code.DEADLINE_EXCEEDED -> "Request timed out"
+                Status.Code.DEADLINE_EXCEEDED -> if (waitNewEvent) "Long poll timeout" else "Request timed out"
                 Status.Code.PERMISSION_DENIED -> "Permission denied"
                 Status.Code.UNAUTHENTICATED -> "Authentication failed"
+                Status.Code.CANCELLED -> "Request cancelled"
                 else -> "Error: ${e.status.description ?: e.message}"
             }
             Result.failure(WorkflowServiceException(message, e))

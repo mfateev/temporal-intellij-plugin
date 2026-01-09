@@ -36,7 +36,6 @@ class WorkflowInspectorPanel(private val project: Project) : JBPanel<WorkflowIns
     private val browseButton = JButton("...")
     private val runIdField = JBTextField(36)  // UUID length
     private val inspectButton = JButton("Inspect")
-    private val refreshButton = JButton(AllIcons.Actions.Refresh)
 
     // Display components
     private val statusLabel = JBLabel()
@@ -47,10 +46,10 @@ class WorkflowInspectorPanel(private val project: Project) : JBPanel<WorkflowIns
     private val eventHistoryTreePanel = EventHistoryTreePanel()
     private val queryPanel = QueryPanel(project)
 
-    // Auto-refresh components
-    private val autoRefreshCheckbox = JCheckBox("Auto-refresh")
-    private val refreshIntervalCombo = JComboBox(arrayOf("3s", "5s", "10s", "30s"))
-    private var autoRefreshTimer: Timer? = null
+    // Auto-refresh components (using long polling)
+    private val autoRefreshCheckbox = JCheckBox("Live updates")
+    @Volatile private var longPollActive = false
+    private var longPollThread: Thread? = null
     private val isRefreshing = AtomicBoolean(false)
     private val lastRefreshLabel = JBLabel()
 
@@ -74,6 +73,17 @@ class WorkflowInspectorPanel(private val project: Project) : JBPanel<WorkflowIns
         contentPanel.add(statusLabel, BorderLayout.NORTH)
 
         // Overview tab - execution info and pending items
+        val overviewContainer = JBPanel<JBPanel<*>>(BorderLayout())
+
+        // Refresh button header for Overview tab
+        val overviewHeader = JBPanel<JBPanel<*>>(FlowLayout(FlowLayout.RIGHT, 5, 2))
+        val overviewRefreshButton = JButton(AllIcons.Actions.Refresh)
+        overviewRefreshButton.toolTipText = "Refresh workflow info"
+        overviewRefreshButton.preferredSize = java.awt.Dimension(28, 28)
+        overviewRefreshButton.addActionListener { refreshOverviewInfo() }
+        overviewHeader.add(overviewRefreshButton)
+        overviewContainer.add(overviewHeader, BorderLayout.NORTH)
+
         val overviewPanel = JBPanel<JBPanel<*>>()
         overviewPanel.layout = BoxLayout(overviewPanel, BoxLayout.Y_AXIS)
         overviewPanel.add(executionInfoPanel)
@@ -85,9 +95,10 @@ class WorkflowInspectorPanel(private val project: Project) : JBPanel<WorkflowIns
 
         val overviewScrollPane = JBScrollPane(overviewPanel)
         overviewScrollPane.border = JBUI.Borders.empty()
+        overviewContainer.add(overviewScrollPane, BorderLayout.CENTER)
 
         // Add tabs
-        tabbedPane.addTab("Overview", overviewScrollPane)
+        tabbedPane.addTab("Overview", overviewContainer)
         tabbedPane.addTab("History", eventHistoryTreePanel)
         tabbedPane.addTab("Query", queryPanel)
 
@@ -129,27 +140,13 @@ class WorkflowInspectorPanel(private val project: Project) : JBPanel<WorkflowIns
         inspectButton.toolTipText = "Fetch and display workflow execution details"
         inspectButton.addActionListener { loadWorkflow() }
         row3.add(inspectButton)
-        refreshButton.toolTipText = "Refresh workflow info"
-        refreshButton.addActionListener { refreshWorkflow() }
-        refreshButton.isEnabled = false
-        row3.add(refreshButton)
 
-        // Auto-refresh controls
-        row3.add(Box.createHorizontalStrut(15))
-        autoRefreshCheckbox.toolTipText = "Automatically refresh workflow info at the specified interval"
+        // Live updates controls (long polling)
+        row3.add(Box.createHorizontalStrut(10))
+        autoRefreshCheckbox.toolTipText = "Watch for new events in real-time using long polling"
         autoRefreshCheckbox.isEnabled = false
         autoRefreshCheckbox.addActionListener { toggleAutoRefresh() }
         row3.add(autoRefreshCheckbox)
-
-        refreshIntervalCombo.toolTipText = "Refresh interval"
-        refreshIntervalCombo.selectedIndex = 1  // Default to 5s
-        refreshIntervalCombo.isEnabled = false
-        refreshIntervalCombo.addActionListener {
-            if (autoRefreshCheckbox.isSelected) {
-                restartAutoRefreshTimer()
-            }
-        }
-        row3.add(refreshIntervalCombo)
 
         lastRefreshLabel.foreground = JBColor.GRAY
         lastRefreshLabel.border = JBUI.Borders.emptyLeft(10)
@@ -178,99 +175,111 @@ class WorkflowInspectorPanel(private val project: Project) : JBPanel<WorkflowIns
         fetchWorkflowInfo(workflowId, runId)
     }
 
-    private fun refreshWorkflow() {
-        currentWorkflowId?.let { workflowId ->
-            fetchWorkflowInfo(workflowId, currentRunId)
-        }
-    }
-
     private fun toggleAutoRefresh() {
         if (autoRefreshCheckbox.isSelected) {
-            startAutoRefreshTimer()
+            startLongPolling()
         } else {
-            stopAutoRefreshTimer()
+            stopLongPolling()
         }
     }
 
-    private fun startAutoRefreshTimer() {
-        stopAutoRefreshTimer()
-        val intervalMs = getRefreshIntervalMs()
-        autoRefreshTimer = Timer(intervalMs) { performAutoRefresh() }
-        autoRefreshTimer?.isRepeats = true
-        autoRefreshTimer?.start()
+    private fun startLongPolling() {
+        stopLongPolling()
+        val workflowId = currentWorkflowId ?: return
+        val runId = currentRunId
+        val service = workflowService ?: return
+
+        longPollActive = true
         updateLastRefreshLabel()
-    }
 
-    private fun restartAutoRefreshTimer() {
-        if (autoRefreshCheckbox.isSelected) {
-            startAutoRefreshTimer()
+        longPollThread = Thread {
+            while (longPollActive && currentWorkflowId == workflowId) {
+                try {
+                    // Long poll for new history events
+                    val result = service.waitForNewHistoryEvents(workflowId, runId)
+
+                    if (!longPollActive || currentWorkflowId != workflowId) break
+
+                    if (result.isSuccess) {
+                        val historyPage = result.getOrNull()!!
+                        ApplicationManager.getApplication().invokeLater {
+                            if (longPollActive && currentWorkflowId == workflowId) {
+                                eventHistoryTreePanel.update(historyPage.events)
+                                updateLastRefreshLabel()
+                                // Also refresh workflow info to get updated status
+                                refreshWorkflowInfoSilently()
+                            }
+                        }
+                    } else {
+                        val error = result.exceptionOrNull()
+                        // On timeout, just retry the long poll
+                        if (error?.message?.contains("Long poll timeout") == true) {
+                            continue
+                        }
+                        // On other errors, stop polling
+                        break
+                    }
+                } catch (e: InterruptedException) {
+                    break
+                } catch (e: Exception) {
+                    // On error, wait briefly before retrying
+                    if (longPollActive) {
+                        Thread.sleep(1000)
+                    }
+                }
+            }
+            ApplicationManager.getApplication().invokeLater {
+                if (!longPollActive) {
+                    lastRefreshLabel.text = ""
+                }
+            }
         }
+        longPollThread?.name = "Temporal-LongPoll-$workflowId"
+        longPollThread?.isDaemon = true
+        longPollThread?.start()
     }
 
-    private fun stopAutoRefreshTimer() {
-        autoRefreshTimer?.stop()
-        autoRefreshTimer = null
+    private fun stopLongPolling() {
+        longPollActive = false
+        longPollThread?.interrupt()
+        longPollThread = null
         lastRefreshLabel.text = ""
     }
 
-    private fun getRefreshIntervalMs(): Int {
-        return when (refreshIntervalCombo.selectedItem as String) {
-            "3s" -> 3000
-            "5s" -> 5000
-            "10s" -> 10000
-            "30s" -> 30000
-            else -> 5000
+    private fun refreshWorkflowInfoSilently() {
+        val workflowId = currentWorkflowId ?: return
+        val service = workflowService ?: return
+
+        ApplicationManager.getApplication().executeOnPooledThread {
+            val result = service.describeWorkflow(workflowId, currentRunId)
+            ApplicationManager.getApplication().invokeLater {
+                if (result.isSuccess) {
+                    val info = result.getOrNull()!!
+                    executionInfoPanel.update(info)
+                    pendingActivitiesPanel.update(info.pendingActivities)
+                    pendingChildrenPanel.update(info.pendingChildren)
+                }
+            }
         }
     }
 
-    private fun performAutoRefresh() {
-        if (isRefreshing.get()) return  // Skip if already refreshing
+    private fun refreshOverviewInfo() {
         val workflowId = currentWorkflowId ?: return
+        val service = workflowService ?: return
 
-        isRefreshing.set(true)
-        updateLastRefreshLabel()
-
-        // Run refresh in background without showing progress dialog
-        ApplicationManager.getApplication().executeOnPooledThread {
-            try {
-                val service = workflowService ?: return@executeOnPooledThread
+        ProgressManager.getInstance().run(object : Task.Backgroundable(project, "Refreshing...", false) {
+            override fun run(indicator: ProgressIndicator) {
                 val result = service.describeWorkflow(workflowId, currentRunId)
-
                 ApplicationManager.getApplication().invokeLater {
                     if (result.isSuccess) {
                         val info = result.getOrNull()!!
                         executionInfoPanel.update(info)
                         pendingActivitiesPanel.update(info.pendingActivities)
                         pendingChildrenPanel.update(info.pendingChildren)
-
-                        // Also refresh event history
-                        refreshEventHistorySilently()
                     }
-                    isRefreshing.set(false)
-                    updateLastRefreshLabel()
-                }
-            } catch (e: Exception) {
-                isRefreshing.set(false)
-                ApplicationManager.getApplication().invokeLater {
-                    updateLastRefreshLabel()
                 }
             }
-        }
-    }
-
-    private fun refreshEventHistorySilently() {
-        val workflowId = currentWorkflowId ?: return
-        val service = workflowService ?: return
-
-        ApplicationManager.getApplication().executeOnPooledThread {
-            val result = service.getWorkflowHistory(workflowId, currentRunId)
-            ApplicationManager.getApplication().invokeLater {
-                if (result.isSuccess) {
-                    val historyPage = result.getOrNull()!!
-                    eventHistoryTreePanel.update(historyPage.events)
-                }
-            }
-        }
+        })
     }
 
     private fun updateLastRefreshLabel() {
@@ -335,7 +344,6 @@ class WorkflowInspectorPanel(private val project: Project) : JBPanel<WorkflowIns
         statusLabel.isVisible = true
         setDetailsVisible(false)
         inspectButton.isEnabled = false
-        refreshButton.isEnabled = false
 
         ProgressManager.getInstance().run(object : Task.Backgroundable(project, "Loading Workflow", true) {
             override fun run(indicator: ProgressIndicator) {
@@ -357,7 +365,6 @@ class WorkflowInspectorPanel(private val project: Project) : JBPanel<WorkflowIns
                     inspectButton.isEnabled = true
                     if (result.isSuccess) {
                         displayWorkflowInfo(result.getOrNull()!!)
-                        refreshButton.isEnabled = true
                     } else {
                         showError(result.exceptionOrNull()?.message ?: "Unknown error")
                     }
@@ -378,9 +385,12 @@ class WorkflowInspectorPanel(private val project: Project) : JBPanel<WorkflowIns
         pendingActivitiesPanel.update(info.pendingActivities)
         pendingChildrenPanel.update(info.pendingChildren)
 
-        // Enable auto-refresh controls
+        // Enable and start live updates by default
         autoRefreshCheckbox.isEnabled = true
-        refreshIntervalCombo.isEnabled = true
+        if (!autoRefreshCheckbox.isSelected) {
+            autoRefreshCheckbox.isSelected = true
+            startLongPolling()
+        }
 
         // Set up query panel context
         queryPanel.setWorkflowContext(currentWorkflowId, currentRunId, workflowService)
@@ -419,13 +429,11 @@ class WorkflowInspectorPanel(private val project: Project) : JBPanel<WorkflowIns
             statusLabel.isVisible = true
             setDetailsVisible(false)
             inspectButton.isEnabled = true
-            refreshButton.isEnabled = currentWorkflowId != null
 
-            // Disable auto-refresh on error
-            stopAutoRefreshTimer()
+            // Disable live updates on error
+            stopLongPolling()
             autoRefreshCheckbox.isSelected = false
             autoRefreshCheckbox.isEnabled = false
-            refreshIntervalCombo.isEnabled = false
         }
     }
 
@@ -442,7 +450,7 @@ class WorkflowInspectorPanel(private val project: Project) : JBPanel<WorkflowIns
     }
 
     fun dispose() {
-        stopAutoRefreshTimer()
+        stopLongPolling()
         workflowService?.disconnect()
         workflowService = null
     }
