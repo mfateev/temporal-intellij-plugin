@@ -21,7 +21,18 @@ import java.time.Instant
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import javax.swing.*
-import java.util.concurrent.atomic.AtomicBoolean
+
+/**
+ * Display mode for event history.
+ * - LIVE: Show all events and auto-update on new events
+ * - PAUSED: Buffer events but don't update display (long poll continues)
+ * - FROZEN: Show snapshot at refresh time, ignore new events until refresh or live mode
+ */
+enum class DisplayMode {
+    LIVE,
+    PAUSED,
+    FROZEN
+}
 
 /**
  * Panel for inspecting workflow executions.
@@ -35,7 +46,7 @@ class WorkflowInspectorPanel(private val project: Project) : JBPanel<WorkflowIns
     private val workflowIdField = JBTextField(36)  // UUID length
     private val browseButton = JButton("...")
     private val runIdField = JBTextField(36)  // UUID length
-    private val inspectButton = JButton("Inspect")
+    private val refreshButton = JButton("Refresh")
 
     // Display components
     private val statusLabel = JBLabel()
@@ -46,16 +57,27 @@ class WorkflowInspectorPanel(private val project: Project) : JBPanel<WorkflowIns
     private val eventHistoryTreePanel = EventHistoryTreePanel()
     private val queryPanel = QueryPanel(project)
 
-    // Auto-refresh components (using long polling)
+    // Auto-refresh components (long polling)
     private val autoRefreshCheckbox = JCheckBox("Live updates")
     @Volatile private var longPollActive = false
     private var longPollThread: Thread? = null
-    private val isRefreshing = AtomicBoolean(false)
     private val lastRefreshLabel = JBLabel()
 
-    // State
-    private var currentWorkflowId: String? = null
-    private var currentRunId: String? = null
+    // State - these are accessed from both EDT and long poll thread
+    @Volatile private var currentWorkflowId: String? = null
+    @Volatile private var currentRunId: String? = null
+
+    // Lock for coordinating access to event state between EDT and long poll thread
+    private val stateLock = Object()
+
+    // Cached events and token for incremental refresh (thread-safe for access from long poll thread and EDT)
+    // cachedEvents: ALL events fetched from long poll (always accumulating)
+    // displayedEvents: Events currently shown on screen (may be frozen snapshot)
+    // Access to these should be synchronized on stateLock when reading/writing multiple together
+    private val cachedEvents = mutableListOf<WorkflowHistoryEvent>()
+    private val displayedEvents = mutableListOf<WorkflowHistoryEvent>()
+    @Volatile private var lastNextToken = com.google.protobuf.ByteString.EMPTY
+    @Volatile private var displayMode = DisplayMode.PAUSED
 
     init {
         border = JBUI.Borders.empty(5)
@@ -137,9 +159,9 @@ class WorkflowInspectorPanel(private val project: Project) : JBPanel<WorkflowIns
 
         // Row 3: Action buttons
         val row3 = JBPanel<JBPanel<*>>(FlowLayout(FlowLayout.LEFT, 5, 0))
-        inspectButton.toolTipText = "Fetch and display workflow execution details"
-        inspectButton.addActionListener { loadWorkflow() }
-        row3.add(inspectButton)
+        refreshButton.toolTipText = "Fetch and display workflow execution details"
+        refreshButton.addActionListener { loadWorkflow() }
+        row3.add(refreshButton)
 
         // Live updates controls (long polling)
         row3.add(Box.createHorizontalStrut(10))
@@ -169,17 +191,97 @@ class WorkflowInspectorPanel(private val project: Project) : JBPanel<WorkflowIns
         }
 
         val runId = runIdField.text.trim().ifEmpty { null }
+
+        // Same workflow - handle based on display mode
+        if (currentWorkflowId == workflowId && currentRunId == runId) {
+            handleRefreshForCurrentWorkflow()
+            return
+        }
+
+        // Different workflow - full cleanup and reload
+        cleanupCurrentWorkflow()
+
         currentWorkflowId = workflowId
         currentRunId = runId
 
         fetchWorkflowInfo(workflowId, runId)
     }
 
+    /**
+     * Handle refresh button press for the current workflow based on display mode.
+     */
+    private fun handleRefreshForCurrentWorkflow() {
+        when (displayMode) {
+            DisplayMode.LIVE -> {
+                // Already showing everything, just refresh workflow info
+                refreshWorkflowInfoSilently()
+                eventHistoryTreePanel.scrollToBottom()
+            }
+            DisplayMode.PAUSED, DisplayMode.FROZEN -> {
+                // Copy all cached events to display, then freeze
+                val eventsSnapshot: List<WorkflowHistoryEvent>
+                synchronized(stateLock) {
+                    displayedEvents.clear()
+                    displayedEvents.addAll(cachedEvents)
+                    eventsSnapshot = displayedEvents.toList()
+                    displayMode = DisplayMode.FROZEN
+                }
+                eventHistoryTreePanel.update(eventsSnapshot)
+                eventHistoryTreePanel.scrollToBottom()
+                refreshWorkflowInfoSilently()
+                updateLastRefreshLabel()
+            }
+        }
+    }
+
+    /**
+     * Clean up resources when switching to a different workflow.
+     */
+    private fun cleanupCurrentWorkflow() {
+        // Stop long polling thread
+        stopLongPolling()
+
+        // Clear all event caches (synchronized)
+        synchronized(stateLock) {
+            cachedEvents.clear()
+            displayedEvents.clear()
+            lastNextToken = com.google.protobuf.ByteString.EMPTY
+            displayMode = DisplayMode.PAUSED
+        }
+
+        // Clear UI
+        eventHistoryTreePanel.clear()
+
+        // Reset checkbox state
+        autoRefreshCheckbox.isSelected = false
+        autoRefreshCheckbox.isEnabled = false
+        lastRefreshLabel.text = ""
+    }
+
     private fun toggleAutoRefresh() {
         if (autoRefreshCheckbox.isSelected) {
-            startLongPolling()
+            // Switching to LIVE mode - show all buffered events and continue updating
+            val eventsSnapshot: List<WorkflowHistoryEvent>
+            synchronized(stateLock) {
+                displayMode = DisplayMode.LIVE
+                displayedEvents.clear()
+                displayedEvents.addAll(cachedEvents)
+                eventsSnapshot = displayedEvents.toList()
+            }
+            eventHistoryTreePanel.update(eventsSnapshot)
+            eventHistoryTreePanel.scrollToBottom()
+            updateLastRefreshLabel()
+            // Long polling should already be running, but ensure it is
+            if (!longPollActive) {
+                startLongPolling()
+            }
         } else {
-            stopLongPolling()
+            // Switching to PAUSED mode - keep buffering but stop updating display
+            synchronized(stateLock) {
+                displayMode = DisplayMode.PAUSED
+            }
+            updateLastRefreshLabel()
+            // Note: long polling continues in background
         }
     }
 
@@ -192,42 +294,91 @@ class WorkflowInspectorPanel(private val project: Project) : JBPanel<WorkflowIns
         longPollActive = true
         updateLastRefreshLabel()
 
+        // Capture the starting token to continue from where we left off
+        val startToken: com.google.protobuf.ByteString
+        synchronized(stateLock) {
+            startToken = lastNextToken
+        }
+
         longPollThread = Thread {
-            while (longPollActive && currentWorkflowId == workflowId) {
-                try {
-                    // Long poll for new history events
-                    val result = service.waitForNewHistoryEvents(workflowId, runId)
+            try {
+                // Create the iterator - it handles pagination and long polling internally
+                // Start from last token if we have cached events, otherwise start fresh
+                val iterator = service.getHistoryIterator(workflowId, runId, startToken = startToken)
 
-                    if (!longPollActive || currentWorkflowId != workflowId) break
+                while (longPollActive && currentWorkflowId == workflowId) {
+                    if (!iterator.hasNext()) {
+                        break
+                    }
+                    if (!longPollActive || currentWorkflowId != workflowId) {
+                        break
+                    }
 
-                    if (result.isSuccess) {
-                        val historyPage = result.getOrNull()!!
+                    val rawEvent = iterator.next()
+                    val event = service.parseEvent(rawEvent)
+
+                    // Always add to cached events and check display mode atomically
+                    val (isNewEvent, shouldUpdateUi, eventsSnapshot) = synchronized(stateLock) {
+                        val isNew = if (cachedEvents.none { it.eventId == event.eventId }) {
+                            cachedEvents.add(event)
+                            true
+                        } else {
+                            false
+                        }
+
+                        // Save token immediately after each event
+                        lastNextToken = iterator.getNextToken()
+
+                        // Check if we should update UI (only in LIVE mode)
+                        val shouldUpdate = isNew && displayMode == DisplayMode.LIVE
+                        val snapshot = if (shouldUpdate) {
+                            displayedEvents.clear()
+                            displayedEvents.addAll(cachedEvents)
+                            displayedEvents.toList()
+                        } else {
+                            emptyList()
+                        }
+
+                        Triple(isNew, shouldUpdate, snapshot)
+                    }
+
+                    // Update UI outside the lock
+                    if (shouldUpdateUi) {
                         ApplicationManager.getApplication().invokeLater {
-                            if (longPollActive && currentWorkflowId == workflowId) {
-                                eventHistoryTreePanel.update(historyPage.events)
+                            // Re-check conditions on EDT
+                            if (longPollActive && currentWorkflowId == workflowId && displayMode == DisplayMode.LIVE) {
+                                eventHistoryTreePanel.update(eventsSnapshot)
+                                eventHistoryTreePanel.scrollToBottom()
                                 updateLastRefreshLabel()
-                                // Also refresh workflow info to get updated status
                                 refreshWorkflowInfoSilently()
                             }
                         }
-                    } else {
-                        val error = result.exceptionOrNull()
-                        // On timeout, just retry the long poll
-                        if (error?.message?.contains("Long poll timeout") == true) {
-                            continue
+                    }
+
+                    // Check if workflow completed
+                    if (isTerminalEvent(event.eventType)) {
+                        ApplicationManager.getApplication().invokeLater {
+                            // Keep long poll active flag true but disable checkbox
+                            autoRefreshCheckbox.isEnabled = false
+                            if (displayMode == DisplayMode.LIVE) {
+                                lastRefreshLabel.text = "Workflow completed"
+                            }
                         }
-                        // On other errors, stop polling
                         break
                     }
-                } catch (e: InterruptedException) {
-                    break
-                } catch (e: Exception) {
-                    // On error, wait briefly before retrying
-                    if (longPollActive) {
-                        Thread.sleep(1000)
+                }
+            } catch (e: InterruptedException) {
+                // Thread interrupted, exit gracefully
+            } catch (e: Exception) {
+                // On error, show error (but only if we were actively polling)
+                if (longPollActive) {
+                    val errorMsg = e.message?.take(50) ?: "Unknown error"
+                    ApplicationManager.getApplication().invokeLater {
+                        lastRefreshLabel.text = "Error: $errorMsg"
                     }
                 }
             }
+
             ApplicationManager.getApplication().invokeLater {
                 if (!longPollActive) {
                     lastRefreshLabel.text = ""
@@ -237,6 +388,16 @@ class WorkflowInspectorPanel(private val project: Project) : JBPanel<WorkflowIns
         longPollThread?.name = "Temporal-LongPoll-$workflowId"
         longPollThread?.isDaemon = true
         longPollThread?.start()
+    }
+
+    private fun isTerminalEvent(eventType: String): Boolean {
+        // Only check for WORKFLOW_EXECUTION terminal events, not activity/task events
+        return eventType.contains("WORKFLOW_EXECUTION_COMPLETED") ||
+               eventType.contains("WORKFLOW_EXECUTION_FAILED") ||
+               eventType.contains("WORKFLOW_EXECUTION_CANCELED") ||
+               eventType.contains("WORKFLOW_EXECUTION_TERMINATED") ||
+               eventType.contains("WORKFLOW_EXECUTION_TIMED_OUT") ||
+               eventType.contains("WORKFLOW_EXECUTION_CONTINUED_AS_NEW")
     }
 
     private fun stopLongPolling() {
@@ -285,12 +446,29 @@ class WorkflowInspectorPanel(private val project: Project) : JBPanel<WorkflowIns
     private fun updateLastRefreshLabel() {
         val now = java.time.LocalTime.now()
         val timeStr = now.format(java.time.format.DateTimeFormatter.ofPattern("HH:mm:ss"))
-        if (isRefreshing.get()) {
-            lastRefreshLabel.text = "Refreshing..."
-        } else if (autoRefreshCheckbox.isSelected) {
-            lastRefreshLabel.text = "Last: $timeStr"
-        } else {
-            lastRefreshLabel.text = ""
+
+        val (mode, bufferedCount) = synchronized(stateLock) {
+            Pair(displayMode, cachedEvents.size - displayedEvents.size)
+        }
+
+        when (mode) {
+            DisplayMode.LIVE -> {
+                lastRefreshLabel.text = "Live: $timeStr"
+            }
+            DisplayMode.PAUSED -> {
+                if (bufferedCount > 0) {
+                    lastRefreshLabel.text = "Paused (+$bufferedCount buffered)"
+                } else {
+                    lastRefreshLabel.text = "Paused"
+                }
+            }
+            DisplayMode.FROZEN -> {
+                if (bufferedCount > 0) {
+                    lastRefreshLabel.text = "Frozen (+$bufferedCount new)"
+                } else {
+                    lastRefreshLabel.text = "Frozen at $timeStr"
+                }
+            }
         }
     }
 
@@ -343,7 +521,7 @@ class WorkflowInspectorPanel(private val project: Project) : JBPanel<WorkflowIns
         statusLabel.text = "<html><i>Loading workflow...</i></html>"
         statusLabel.isVisible = true
         setDetailsVisible(false)
-        inspectButton.isEnabled = false
+        refreshButton.isEnabled = false
 
         ProgressManager.getInstance().run(object : Task.Backgroundable(project, "Loading Workflow", true) {
             override fun run(indicator: ProgressIndicator) {
@@ -362,7 +540,7 @@ class WorkflowInspectorPanel(private val project: Project) : JBPanel<WorkflowIns
                 val result = service.describeWorkflow(workflowId, runId)
 
                 ApplicationManager.getApplication().invokeLater {
-                    inspectButton.isEnabled = true
+                    refreshButton.isEnabled = true
                     if (result.isSuccess) {
                         displayWorkflowInfo(result.getOrNull()!!)
                     } else {
@@ -385,18 +563,28 @@ class WorkflowInspectorPanel(private val project: Project) : JBPanel<WorkflowIns
         pendingActivitiesPanel.update(info.pendingActivities)
         pendingChildrenPanel.update(info.pendingChildren)
 
-        // Enable and start live updates by default
-        autoRefreshCheckbox.isEnabled = true
-        if (!autoRefreshCheckbox.isSelected) {
-            autoRefreshCheckbox.isSelected = true
-            startLongPolling()
-        }
+        // Enable live updates checkbox only for running workflows
+        val isRunning = info.status == WorkflowStatus.RUNNING
+        autoRefreshCheckbox.isEnabled = isRunning
 
         // Set up query panel context
         queryPanel.setWorkflowContext(currentWorkflowId, currentRunId, workflowService)
 
-        // Load event history in background
-        loadEventHistory()
+        if (isRunning) {
+            // For running workflows: start in LIVE mode with long polling
+            synchronized(stateLock) {
+                displayMode = DisplayMode.LIVE
+            }
+            autoRefreshCheckbox.isSelected = true
+            startLongPolling()
+        } else {
+            // For completed workflows: load full history without long polling
+            synchronized(stateLock) {
+                displayMode = DisplayMode.PAUSED
+            }
+            autoRefreshCheckbox.isSelected = false
+            loadEventHistory()
+        }
     }
 
     private fun loadEventHistory() {
@@ -408,16 +596,37 @@ class WorkflowInspectorPanel(private val project: Project) : JBPanel<WorkflowIns
                 indicator.text = "Fetching event history..."
                 indicator.isIndeterminate = true
 
-                val result = service.getWorkflowHistory(workflowId, currentRunId)
+                val allEvents = mutableListOf<WorkflowHistoryEvent>()
+                var nextPageToken = com.google.protobuf.ByteString.EMPTY
+
+                // Load all pages of history
+                do {
+                    val result = service.getWorkflowHistory(workflowId, currentRunId, nextPageToken = nextPageToken)
+                    if (result.isFailure) {
+                        ApplicationManager.getApplication().invokeLater {
+                            eventHistoryTreePanel.clear()
+                        }
+                        return
+                    }
+
+                    val historyPage = result.getOrNull()!!
+                    allEvents.addAll(historyPage.events)
+                    nextPageToken = historyPage.nextPageToken
+
+                    indicator.text = "Loading history... ${allEvents.size} events"
+                } while (!nextPageToken.isEmpty)
+
+                // Populate both caches (synchronized)
+                synchronized(stateLock) {
+                    cachedEvents.clear()
+                    cachedEvents.addAll(allEvents)
+                    displayedEvents.clear()
+                    displayedEvents.addAll(allEvents)
+                    lastNextToken = nextPageToken
+                }
 
                 ApplicationManager.getApplication().invokeLater {
-                    if (result.isSuccess) {
-                        val historyPage = result.getOrNull()!!
-                        eventHistoryTreePanel.update(historyPage.events)
-                    } else {
-                        // Show error in status but don't fail the whole display
-                        eventHistoryTreePanel.clear()
-                    }
+                    eventHistoryTreePanel.update(allEvents)
                 }
             }
         })
@@ -428,7 +637,7 @@ class WorkflowInspectorPanel(private val project: Project) : JBPanel<WorkflowIns
             statusLabel.text = "<html><font color='red'>$message</font></html>"
             statusLabel.isVisible = true
             setDetailsVisible(false)
-            inspectButton.isEnabled = true
+            refreshButton.isEnabled = true
 
             // Disable live updates on error
             stopLongPolling()
