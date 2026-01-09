@@ -33,18 +33,32 @@ class EventHistoryTreePanel : JBPanel<EventHistoryTreePanel>(BorderLayout()) {
     init {
         border = JBUI.Borders.empty(5)
 
-        // Header panel with filter
+        // Header panel with filter and expand/collapse buttons
         val headerPanel = JBPanel<JBPanel<*>>(BorderLayout())
         headerPanel.add(headerLabel, BorderLayout.WEST)
 
-        val filterPanel = JBPanel<JBPanel<*>>(FlowLayout(FlowLayout.RIGHT, 5, 0))
-        filterPanel.add(JBLabel("Filter:"))
+        val controlsPanel = JBPanel<JBPanel<*>>(FlowLayout(FlowLayout.RIGHT, 5, 0))
+
+        // Expand/Collapse buttons
+        val expandAllButton = JButton("Expand All")
+        expandAllButton.addActionListener { expandAll() }
+        controlsPanel.add(expandAllButton)
+
+        val collapseAllButton = JButton("Collapse All")
+        collapseAllButton.addActionListener { collapseAll() }
+        controlsPanel.add(collapseAllButton)
+
+        // Separator
+        controlsPanel.add(JBLabel("  |  "))
+
+        // Filter dropdown
+        controlsPanel.add(JBLabel("Filter:"))
         filterComboBox.addActionListener {
             currentFilter = filterComboBox.selectedItem as String
             applyFilter()
         }
-        filterPanel.add(filterComboBox)
-        headerPanel.add(filterPanel, BorderLayout.EAST)
+        controlsPanel.add(filterComboBox)
+        headerPanel.add(controlsPanel, BorderLayout.EAST)
         headerPanel.border = JBUI.Borders.emptyBottom(5)
 
         add(headerPanel, BorderLayout.NORTH)

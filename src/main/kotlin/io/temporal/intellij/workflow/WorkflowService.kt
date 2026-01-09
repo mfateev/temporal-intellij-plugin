@@ -365,7 +365,10 @@ class WorkflowService(private val settings: TemporalSettings.State) {
                     details["workflowType"] = attrs.workflowType.name
                     details["taskQueue"] = attrs.taskQueue.name
                     if (attrs.hasInput() && attrs.input.payloadsCount > 0) {
-                        details["input"] = tryDecodePayload(attrs.input.getPayloads(0)) ?: "<binary>"
+                        details["input"] = decodeAllPayloads(attrs.input)
+                    }
+                    if (attrs.parentWorkflowExecution != null && attrs.parentWorkflowExecution.workflowId.isNotEmpty()) {
+                        details["parentWorkflowId"] = attrs.parentWorkflowExecution.workflowId
                     }
                 }
             }
@@ -373,7 +376,7 @@ class WorkflowService(private val settings: TemporalSettings.State) {
                 if (event.hasWorkflowExecutionCompletedEventAttributes()) {
                     val attrs = event.workflowExecutionCompletedEventAttributes
                     if (attrs.hasResult() && attrs.result.payloadsCount > 0) {
-                        details["result"] = tryDecodePayload(attrs.result.getPayloads(0)) ?: "<binary>"
+                        details["result"] = decodeAllPayloads(attrs.result)
                     }
                 }
             }
@@ -382,6 +385,23 @@ class WorkflowService(private val settings: TemporalSettings.State) {
                     val attrs = event.workflowExecutionFailedEventAttributes
                     if (attrs.hasFailure()) {
                         details["failure"] = attrs.failure.message
+                        if (attrs.failure.stackTrace.isNotEmpty()) {
+                            details["stackTrace"] = attrs.failure.stackTrace
+                        }
+                    }
+                }
+            }
+            EventType.EVENT_TYPE_WORKFLOW_EXECUTION_TIMED_OUT -> {
+                if (event.hasWorkflowExecutionTimedOutEventAttributes()) {
+                    val attrs = event.workflowExecutionTimedOutEventAttributes
+                    details["retryState"] = attrs.retryState.name
+                }
+            }
+            EventType.EVENT_TYPE_WORKFLOW_EXECUTION_CANCELED -> {
+                if (event.hasWorkflowExecutionCanceledEventAttributes()) {
+                    val attrs = event.workflowExecutionCanceledEventAttributes
+                    if (attrs.hasDetails() && attrs.details.payloadsCount > 0) {
+                        details["details"] = decodeAllPayloads(attrs.details)
                     }
                 }
             }
@@ -391,21 +411,65 @@ class WorkflowService(private val settings: TemporalSettings.State) {
                     details["activityType"] = attrs.activityType.name
                     details["activityId"] = attrs.activityId
                     details["taskQueue"] = attrs.taskQueue.name
+                    if (attrs.hasInput() && attrs.input.payloadsCount > 0) {
+                        details["input"] = decodeAllPayloads(attrs.input)
+                    }
+                    if (attrs.hasScheduleToCloseTimeout()) {
+                        details["scheduleToCloseTimeout"] = formatProtoDuration(attrs.scheduleToCloseTimeout)
+                    }
+                    if (attrs.hasStartToCloseTimeout()) {
+                        details["startToCloseTimeout"] = formatProtoDuration(attrs.startToCloseTimeout)
+                    }
+                }
+            }
+            EventType.EVENT_TYPE_ACTIVITY_TASK_STARTED -> {
+                if (event.hasActivityTaskStartedEventAttributes()) {
+                    val attrs = event.activityTaskStartedEventAttributes
+                    details["scheduledEventId"] = attrs.scheduledEventId.toString()
+                    details["attempt"] = attrs.attempt.toString()
+                    if (attrs.hasLastFailure() && attrs.lastFailure.message.isNotEmpty()) {
+                        details["lastFailure"] = attrs.lastFailure.message
+                    }
                 }
             }
             EventType.EVENT_TYPE_ACTIVITY_TASK_COMPLETED -> {
                 if (event.hasActivityTaskCompletedEventAttributes()) {
                     val attrs = event.activityTaskCompletedEventAttributes
+                    details["scheduledEventId"] = attrs.scheduledEventId.toString()
                     if (attrs.hasResult() && attrs.result.payloadsCount > 0) {
-                        details["result"] = tryDecodePayload(attrs.result.getPayloads(0)) ?: "<binary>"
+                        details["result"] = decodeAllPayloads(attrs.result)
                     }
                 }
             }
             EventType.EVENT_TYPE_ACTIVITY_TASK_FAILED -> {
                 if (event.hasActivityTaskFailedEventAttributes()) {
                     val attrs = event.activityTaskFailedEventAttributes
+                    details["scheduledEventId"] = attrs.scheduledEventId.toString()
                     if (attrs.hasFailure()) {
                         details["failure"] = attrs.failure.message
+                        if (attrs.failure.stackTrace.isNotEmpty()) {
+                            details["stackTrace"] = attrs.failure.stackTrace
+                        }
+                    }
+                    details["retryState"] = attrs.retryState.name
+                }
+            }
+            EventType.EVENT_TYPE_ACTIVITY_TASK_TIMED_OUT -> {
+                if (event.hasActivityTaskTimedOutEventAttributes()) {
+                    val attrs = event.activityTaskTimedOutEventAttributes
+                    details["scheduledEventId"] = attrs.scheduledEventId.toString()
+                    if (attrs.hasFailure()) {
+                        details["failure"] = attrs.failure.message
+                    }
+                    details["retryState"] = attrs.retryState.name
+                }
+            }
+            EventType.EVENT_TYPE_ACTIVITY_TASK_CANCELED -> {
+                if (event.hasActivityTaskCanceledEventAttributes()) {
+                    val attrs = event.activityTaskCanceledEventAttributes
+                    details["scheduledEventId"] = attrs.scheduledEventId.toString()
+                    if (attrs.hasDetails() && attrs.details.payloadsCount > 0) {
+                        details["details"] = decodeAllPayloads(attrs.details)
                     }
                 }
             }
@@ -414,17 +478,22 @@ class WorkflowService(private val settings: TemporalSettings.State) {
                     val attrs = event.timerStartedEventAttributes
                     details["timerId"] = attrs.timerId
                     if (attrs.hasStartToFireTimeout()) {
-                        val duration = Duration.ofSeconds(
-                            attrs.startToFireTimeout.seconds,
-                            attrs.startToFireTimeout.nanos.toLong()
-                        )
-                        details["duration"] = formatDuration(duration)
+                        details["duration"] = formatProtoDuration(attrs.startToFireTimeout)
                     }
                 }
             }
             EventType.EVENT_TYPE_TIMER_FIRED -> {
                 if (event.hasTimerFiredEventAttributes()) {
-                    details["timerId"] = event.timerFiredEventAttributes.timerId
+                    val attrs = event.timerFiredEventAttributes
+                    details["timerId"] = attrs.timerId
+                    details["startedEventId"] = attrs.startedEventId.toString()
+                }
+            }
+            EventType.EVENT_TYPE_TIMER_CANCELED -> {
+                if (event.hasTimerCanceledEventAttributes()) {
+                    val attrs = event.timerCanceledEventAttributes
+                    details["timerId"] = attrs.timerId
+                    details["startedEventId"] = attrs.startedEventId.toString()
                 }
             }
             EventType.EVENT_TYPE_WORKFLOW_EXECUTION_SIGNALED -> {
@@ -432,7 +501,7 @@ class WorkflowService(private val settings: TemporalSettings.State) {
                     val attrs = event.workflowExecutionSignaledEventAttributes
                     details["signalName"] = attrs.signalName
                     if (attrs.hasInput() && attrs.input.payloadsCount > 0) {
-                        details["input"] = tryDecodePayload(attrs.input.getPayloads(0)) ?: "<binary>"
+                        details["input"] = decodeAllPayloads(attrs.input)
                     }
                 }
             }
@@ -441,6 +510,71 @@ class WorkflowService(private val settings: TemporalSettings.State) {
                     val attrs = event.startChildWorkflowExecutionInitiatedEventAttributes
                     details["workflowType"] = attrs.workflowType.name
                     details["workflowId"] = attrs.workflowId
+                    details["taskQueue"] = attrs.taskQueue.name
+                    if (attrs.hasInput() && attrs.input.payloadsCount > 0) {
+                        details["input"] = decodeAllPayloads(attrs.input)
+                    }
+                }
+            }
+            EventType.EVENT_TYPE_CHILD_WORKFLOW_EXECUTION_STARTED -> {
+                if (event.hasChildWorkflowExecutionStartedEventAttributes()) {
+                    val attrs = event.childWorkflowExecutionStartedEventAttributes
+                    details["workflowId"] = attrs.workflowExecution.workflowId
+                    details["runId"] = attrs.workflowExecution.runId
+                    details["workflowType"] = attrs.workflowType.name
+                }
+            }
+            EventType.EVENT_TYPE_CHILD_WORKFLOW_EXECUTION_COMPLETED -> {
+                if (event.hasChildWorkflowExecutionCompletedEventAttributes()) {
+                    val attrs = event.childWorkflowExecutionCompletedEventAttributes
+                    details["workflowId"] = attrs.workflowExecution.workflowId
+                    if (attrs.hasResult() && attrs.result.payloadsCount > 0) {
+                        details["result"] = decodeAllPayloads(attrs.result)
+                    }
+                }
+            }
+            EventType.EVENT_TYPE_CHILD_WORKFLOW_EXECUTION_FAILED -> {
+                if (event.hasChildWorkflowExecutionFailedEventAttributes()) {
+                    val attrs = event.childWorkflowExecutionFailedEventAttributes
+                    details["workflowId"] = attrs.workflowExecution.workflowId
+                    if (attrs.hasFailure()) {
+                        details["failure"] = attrs.failure.message
+                    }
+                }
+            }
+            EventType.EVENT_TYPE_CHILD_WORKFLOW_EXECUTION_CANCELED -> {
+                if (event.hasChildWorkflowExecutionCanceledEventAttributes()) {
+                    val attrs = event.childWorkflowExecutionCanceledEventAttributes
+                    details["workflowId"] = attrs.workflowExecution.workflowId
+                    if (attrs.hasDetails() && attrs.details.payloadsCount > 0) {
+                        details["details"] = decodeAllPayloads(attrs.details)
+                    }
+                }
+            }
+            EventType.EVENT_TYPE_CHILD_WORKFLOW_EXECUTION_TIMED_OUT -> {
+                if (event.hasChildWorkflowExecutionTimedOutEventAttributes()) {
+                    val attrs = event.childWorkflowExecutionTimedOutEventAttributes
+                    details["workflowId"] = attrs.workflowExecution.workflowId
+                }
+            }
+            EventType.EVENT_TYPE_WORKFLOW_EXECUTION_UPDATE_ACCEPTED -> {
+                if (event.hasWorkflowExecutionUpdateAcceptedEventAttributes()) {
+                    val attrs = event.workflowExecutionUpdateAcceptedEventAttributes
+                    details["updateId"] = attrs.acceptedRequest.meta.updateId
+                    if (attrs.acceptedRequest.hasInput() && attrs.acceptedRequest.input.hasArgs()) {
+                        details["input"] = decodeAllPayloads(attrs.acceptedRequest.input.args)
+                    }
+                }
+            }
+            EventType.EVENT_TYPE_WORKFLOW_EXECUTION_UPDATE_COMPLETED -> {
+                if (event.hasWorkflowExecutionUpdateCompletedEventAttributes()) {
+                    val attrs = event.workflowExecutionUpdateCompletedEventAttributes
+                    if (attrs.hasOutcome() && attrs.outcome.hasSuccess()) {
+                        details["result"] = decodeAllPayloads(attrs.outcome.success)
+                    }
+                    if (attrs.hasOutcome() && attrs.outcome.hasFailure()) {
+                        details["failure"] = attrs.outcome.failure.message
+                    }
                 }
             }
             else -> {
@@ -449,6 +583,27 @@ class WorkflowService(private val settings: TemporalSettings.State) {
         }
 
         return details
+    }
+
+    /**
+     * Decode all payloads in a Payloads message to a string representation.
+     */
+    private fun decodeAllPayloads(payloads: Payloads): String {
+        return if (payloads.payloadsCount == 1) {
+            tryDecodePayload(payloads.getPayloads(0)) ?: "<binary>"
+        } else {
+            payloads.payloadsList.mapIndexed { index, payload ->
+                "[$index]: ${tryDecodePayload(payload) ?: "<binary>"}"
+            }.joinToString("\n")
+        }
+    }
+
+    /**
+     * Format a protobuf Duration to a human-readable string.
+     */
+    private fun formatProtoDuration(duration: com.google.protobuf.Duration): String {
+        val javaDuration = Duration.ofSeconds(duration.seconds, duration.nanos.toLong())
+        return formatDuration(javaDuration)
     }
 
     private fun formatDuration(duration: Duration): String {
