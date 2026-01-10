@@ -2,6 +2,22 @@
 
 This plugin uses **JetBrains Remote-Robot** (v0.11.23) for automated UI testing. Tests run in a separate process and communicate with the IDE via HTTP on port 8082.
 
+## Prerequisites
+
+Before running UI tests, you need to set up the test project:
+
+```bash
+# Clone samples-java as the test project (if not already present)
+./setup-test-project.sh
+```
+
+Or manually:
+```bash
+git clone https://github.com/temporalio/samples-java.git testProject
+```
+
+The test project must have `temporal-testing` as a dependency (already included in samples-java).
+
 ## Architecture
 
 ```

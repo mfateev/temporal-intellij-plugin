@@ -35,6 +35,11 @@ This script:
 
 For automated UI testing with Remote-Robot, see [docs/UI_TESTING.md](docs/UI_TESTING.md).
 
+**First-time setup** (required after cloning):
+```bash
+./setup-test-project.sh
+```
+
 Quick reference:
 ```bash
 # Terminal 1: Start IDE with Robot Server
