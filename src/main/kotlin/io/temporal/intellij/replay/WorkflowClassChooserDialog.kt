@@ -2,6 +2,8 @@ package io.temporal.intellij.replay
 
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.ui.DialogWrapper
+import com.intellij.ui.ColoredListCellRenderer
+import com.intellij.ui.SimpleTextAttributes
 import com.intellij.ui.components.JBLabel
 import com.intellij.ui.components.JBList
 import com.intellij.ui.components.JBScrollPane
@@ -12,6 +14,7 @@ import java.awt.event.MouseAdapter
 import java.awt.event.MouseEvent
 import javax.swing.DefaultListModel
 import javax.swing.JComponent
+import javax.swing.JList
 import javax.swing.JPanel
 import javax.swing.ListSelectionModel
 
@@ -83,25 +86,87 @@ class WorkflowClassChooserDialog(
     override fun getPreferredFocusedComponent(): JComponent = implementationList
 
     /**
-     * Custom renderer for workflow implementation list items.
+     * Computes the longest common package prefix among all implementations.
      */
-    private inner class WorkflowImplementationRenderer : javax.swing.DefaultListCellRenderer() {
-        override fun getListCellRendererComponent(
-            list: javax.swing.JList<*>?,
-            value: Any?,
-            index: Int,
-            isSelected: Boolean,
-            cellHasFocus: Boolean
-        ): java.awt.Component {
-            super.getListCellRendererComponent(list, value, index, isSelected, cellHasFocus)
+    private fun computeCommonPackagePrefix(): String {
+        if (implementations.size <= 1) return ""
 
-            if (value is WorkflowClassFinder.WorkflowImplementation) {
-                text = "<html><b>${value.psiClass.name}</b><br/>" +
-                       "<font color='gray' size='-1'>${value.qualifiedName}</font></html>"
-                border = JBUI.Borders.empty(4, 8)
+        val packages = implementations.map { impl ->
+            val qualifiedName = impl.qualifiedName
+            val className = impl.psiClass.name ?: ""
+            if (qualifiedName.endsWith(className)) {
+                qualifiedName.dropLast(className.length).trimEnd('.')
+            } else {
+                qualifiedName.substringBeforeLast('.', "")
+            }
+        }
+
+        if (packages.any { it.isEmpty() }) return ""
+
+        val firstPackage = packages.first()
+        val parts = firstPackage.split('.')
+
+        var commonPrefixLength = 0
+        for (i in parts.indices) {
+            val prefix = parts.subList(0, i + 1).joinToString(".")
+            if (packages.all { it == prefix || it.startsWith("$prefix.") }) {
+                commonPrefixLength = prefix.length
+            } else {
+                break
+            }
+        }
+
+        return if (commonPrefixLength > 0) firstPackage.substring(0, commonPrefixLength) else ""
+    }
+
+    /**
+     * Custom renderer for workflow implementation list items.
+     * Uses ColoredListCellRenderer for proper theme-aware styling.
+     */
+    private inner class WorkflowImplementationRenderer : ColoredListCellRenderer<WorkflowClassFinder.WorkflowImplementation>() {
+        private val commonPrefix = computeCommonPackagePrefix()
+
+        override fun customizeCellRenderer(
+            list: JList<out WorkflowClassFinder.WorkflowImplementation>,
+            value: WorkflowClassFinder.WorkflowImplementation?,
+            index: Int,
+            selected: Boolean,
+            hasFocus: Boolean
+        ) {
+            if (value == null) return
+
+            border = JBUI.Borders.empty(4, 8)
+
+            val className = value.psiClass.name ?: "Unknown"
+            val qualifiedName = value.qualifiedName
+            val packageName = if (qualifiedName.endsWith(className)) {
+                qualifiedName.dropLast(className.length).trimEnd('.')
+            } else {
+                qualifiedName.substringBeforeLast('.', "")
             }
 
-            return this
+            // Class name in bold
+            append(className, SimpleTextAttributes.REGULAR_BOLD_ATTRIBUTES)
+            append("  ", SimpleTextAttributes.REGULAR_ATTRIBUTES)
+
+            // Package name with differentiating part highlighted
+            if (packageName.isNotEmpty()) {
+                if (commonPrefix.isNotEmpty() && packageName.startsWith(commonPrefix)) {
+                    // Show common prefix in gray
+                    append(commonPrefix, SimpleTextAttributes.GRAYED_ATTRIBUTES)
+                    // Show the differentiating part in a distinct color
+                    val uniquePart = packageName.substring(commonPrefix.length)
+                    if (uniquePart.isNotEmpty()) {
+                        append(uniquePart, SimpleTextAttributes(
+                            SimpleTextAttributes.STYLE_BOLD,
+                            null
+                        ))
+                    }
+                } else {
+                    // No common prefix or package doesn't match, show full package
+                    append(packageName, SimpleTextAttributes.GRAYED_ATTRIBUTES)
+                }
+            }
         }
     }
 }
