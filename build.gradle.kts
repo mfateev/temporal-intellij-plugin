@@ -28,7 +28,7 @@ dependencies {
     // Temporal SDK for server connectivity
     implementation("io.temporal:temporal-sdk:1.27.0")
 
-    // Temporal Testing for workflow replay
+    // Temporal Testing for workflow replay (compile-time only - runtime uses project's version)
     implementation("io.temporal:temporal-testing:1.27.0")
 
     // UI Testing with Remote-Robot

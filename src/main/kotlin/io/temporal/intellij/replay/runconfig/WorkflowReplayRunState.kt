@@ -3,13 +3,18 @@ package io.temporal.intellij.replay.runconfig
 import com.intellij.execution.configurations.JavaCommandLineState
 import com.intellij.execution.configurations.JavaParameters
 import com.intellij.execution.runners.ExecutionEnvironment
-import com.intellij.ide.plugins.PluginManagerCore
-import com.intellij.openapi.extensions.PluginId
+import com.intellij.openapi.module.Module
+import com.intellij.openapi.module.ModuleManager
+import com.intellij.openapi.roots.OrderEnumerator
 import java.io.File
 import java.nio.file.Files
 
 /**
  * Run state that executes the workflow replay using the user's project classpath.
+ *
+ * IMPORTANT: The user's project must have `io.temporal:temporal-testing` as a test dependency
+ * for replay to work. This is intentional - we use the project's version to avoid
+ * version conflicts between the plugin and the project's temporal-sdk.
  */
 class WorkflowReplayRunState(
     private val configuration: WorkflowReplayRunConfiguration,
@@ -19,7 +24,6 @@ class WorkflowReplayRunState(
     companion object {
         private const val RUNNER_CLASS = "io.temporal.intellij.replay.WorkflowReplayRunner"
         private const val RUNNER_CLASS_PATH = "io/temporal/intellij/replay/WorkflowReplayRunner.class"
-        private const val PLUGIN_ID = "io.temporal.intellij"
     }
 
     override fun createJavaParameters(): JavaParameters {
@@ -29,8 +33,22 @@ class WorkflowReplayRunState(
             ?: throw IllegalStateException("No module selected for workflow replay. " +
                 "Please select a module in the run configuration settings.")
 
-        // Set up classpath from module (includes project classes + dependencies)
-        params.configureByModule(module, JavaParameters.JDK_AND_CLASSES_AND_TESTS)
+        // Set up JDK
+        params.configureByModule(module, JavaParameters.JDK_ONLY)
+
+        // For Gradle projects, IntelliJ creates separate modules for main and test source sets.
+        // Test dependencies (like temporal-testing) are only on the test module.
+        // Try to find the corresponding test module to include test dependencies.
+        val testModule = findTestModule(module)
+        val moduleForClasspath = testModule ?: module
+
+        // Get classpath from the appropriate module
+        val classpath = OrderEnumerator.orderEntries(moduleForClasspath)
+            .withoutSdk()
+            .recursively()
+            .classes()
+            .pathsList
+        params.classPath.addAll(classpath.pathList)
 
         // Log classpath info for debugging
         val classpathSize = params.classPath.pathList.size
@@ -45,9 +63,6 @@ class WorkflowReplayRunState(
         val runnerDir = extractRunnerClass()
         params.classPath.add(runnerDir.absolutePath)
 
-        // Add temporal-testing JAR from the plugin (needed for WorkflowReplayer)
-        addTemporalTestingJar(params)
-
         // Main class - the replay runner
         params.mainClass = RUNNER_CLASS
 
@@ -59,6 +74,39 @@ class WorkflowReplayRunState(
         params.programParametersList.add(configuration.historyFilePath)
 
         return params
+    }
+
+    /**
+     * Find the test module corresponding to the given module.
+     * For Gradle projects, IntelliJ creates separate modules:
+     * - project.main (or just project) - main source set
+     * - project.test - test source set with testImplementation dependencies
+     */
+    private fun findTestModule(module: Module): Module? {
+        val project = module.project
+        val moduleManager = ModuleManager.getInstance(project)
+        val moduleName = module.name
+
+        // Try different naming patterns for test modules
+        val testModuleNames = listOf(
+            // Gradle pattern: project.main -> project.test
+            moduleName.replace(".main", ".test"),
+            // If module doesn't end with .main, try appending .test
+            "$moduleName.test",
+            // Some projects use _test suffix
+            "${moduleName}_test"
+        )
+
+        for (testName in testModuleNames) {
+            if (testName != moduleName) {
+                val testModule = moduleManager.findModuleByName(testName)
+                if (testModule != null) {
+                    return testModule
+                }
+            }
+        }
+
+        return null
     }
 
     /**
@@ -88,30 +136,5 @@ class WorkflowReplayRunState(
         targetFile.deleteOnExit()
 
         return tempDir
-    }
-
-    /**
-     * Add the temporal-testing and temporal-test-server JARs from the plugin to the classpath.
-     * This provides the WorkflowReplayer class needed for replay functionality.
-     * The user's project may only have temporal-testing as a test dependency,
-     * so we include it from the plugin to ensure it's always available.
-     */
-    private fun addTemporalTestingJar(params: JavaParameters) {
-        val pluginId = PluginId.getId(PLUGIN_ID)
-        val plugin = PluginManagerCore.getPlugin(pluginId) ?: return
-
-        val pluginPath = plugin.pluginPath ?: return
-        val pluginDir = pluginPath.toFile()
-
-        // Look for temporal-testing and temporal-test-server JARs in the plugin's lib directory
-        val libDir = File(pluginDir, "lib")
-        if (libDir.exists() && libDir.isDirectory) {
-            libDir.listFiles()?.filter {
-                (it.name.startsWith("temporal-testing") || it.name.startsWith("temporal-test-server"))
-                    && it.extension == "jar"
-            }?.forEach { jar ->
-                params.classPath.add(jar.absolutePath)
-            }
-        }
     }
 }
