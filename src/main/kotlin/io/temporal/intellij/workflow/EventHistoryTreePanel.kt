@@ -154,6 +154,15 @@ class EventHistoryTreePanel : JBPanel<EventHistoryTreePanel>(BorderLayout()) {
             row--
         }
     }
+
+    /**
+     * Scroll to the bottom of the tree (last event).
+     */
+    fun scrollToBottom() {
+        if (tree.rowCount > 0) {
+            tree.scrollRowToVisible(tree.rowCount - 1)
+        }
+    }
 }
 
 /**

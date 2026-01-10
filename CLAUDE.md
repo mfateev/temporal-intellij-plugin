@@ -1,5 +1,9 @@
 # Temporal IntelliJ Plugin
 
+## Instructions
+
+When asked a question, give an answer. Never jump to implementation or anything else unless there is explicit confirmation.
+
 ## Development Scripts
 
 ### Restart IDE Sandbox
@@ -23,8 +27,21 @@ This script:
 # Run the IDE sandbox
 ./gradlew runIde
 
-# Run tests
+# Run unit tests (excludes UI tests)
 ./gradlew test
+```
+
+## UI Testing
+
+For automated UI testing with Remote-Robot, see [docs/UI_TESTING.md](docs/UI_TESTING.md).
+
+Quick reference:
+```bash
+# Terminal 1: Start IDE with Robot Server
+./gradlew runIdeForUiTests
+
+# Terminal 2: Run UI tests
+./gradlew uiTest
 ```
 
 ## Project Structure

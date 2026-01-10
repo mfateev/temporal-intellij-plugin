@@ -19,3 +19,9 @@ Thumbs.db
 
 # Plugin
 /META-INF/
+
+# Test project (samples-java symlink/copy for testing)
+testProject/
+
+# Serena MCP config
+.serena/
