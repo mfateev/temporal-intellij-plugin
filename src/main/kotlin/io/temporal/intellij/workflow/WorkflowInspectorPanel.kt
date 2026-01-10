@@ -12,6 +12,9 @@ import com.intellij.ui.components.JBPanel
 import com.intellij.ui.components.JBScrollPane
 import com.intellij.ui.components.JBTextField
 import com.intellij.util.ui.JBUI
+import io.temporal.api.history.v1.History
+import io.temporal.api.history.v1.HistoryEvent
+import io.temporal.intellij.replay.WorkflowReplayService
 import io.temporal.intellij.settings.TemporalSettings
 import java.awt.BorderLayout
 import java.awt.FlowLayout
@@ -47,6 +50,8 @@ class WorkflowInspectorPanel(private val project: Project) : JBPanel<WorkflowIns
     private val browseButton = JButton("...")
     private val runIdField = JBTextField(36)  // UUID length
     private val refreshButton = JButton("Refresh")
+    private val replayButton = JButton("Replay")
+    private val importHistoryButton = JButton("Import JSON...")
 
     // Display components
     private val statusLabel = JBLabel()
@@ -72,9 +77,11 @@ class WorkflowInspectorPanel(private val project: Project) : JBPanel<WorkflowIns
 
     // Cached events and token for incremental refresh (thread-safe for access from long poll thread and EDT)
     // cachedEvents: ALL events fetched from long poll (always accumulating)
+    // cachedRawEvents: Raw HistoryEvent protos for replay export
     // displayedEvents: Events currently shown on screen (may be frozen snapshot)
     // Access to these should be synchronized on stateLock when reading/writing multiple together
     private val cachedEvents = mutableListOf<WorkflowHistoryEvent>()
+    private val cachedRawEvents = mutableListOf<HistoryEvent>()
     private val displayedEvents = mutableListOf<WorkflowHistoryEvent>()
     @Volatile private var lastNextToken = com.google.protobuf.ByteString.EMPTY
     @Volatile private var displayMode = DisplayMode.PAUSED
@@ -163,6 +170,15 @@ class WorkflowInspectorPanel(private val project: Project) : JBPanel<WorkflowIns
         refreshButton.addActionListener { loadWorkflow() }
         row3.add(refreshButton)
 
+        replayButton.toolTipText = "Replay this workflow against local implementation"
+        replayButton.isEnabled = false
+        replayButton.addActionListener { startReplay() }
+        row3.add(replayButton)
+
+        importHistoryButton.toolTipText = "Import workflow history from JSON file and replay"
+        importHistoryButton.addActionListener { importHistoryFile() }
+        row3.add(importHistoryButton)
+
         // Live updates controls (long polling)
         row3.add(Box.createHorizontalStrut(10))
         autoRefreshCheckbox.toolTipText = "Watch for new events in real-time using long polling"
@@ -244,6 +260,7 @@ class WorkflowInspectorPanel(private val project: Project) : JBPanel<WorkflowIns
         // Clear all event caches (synchronized)
         synchronized(stateLock) {
             cachedEvents.clear()
+            cachedRawEvents.clear()
             displayedEvents.clear()
             lastNextToken = com.google.protobuf.ByteString.EMPTY
             displayMode = DisplayMode.PAUSED
@@ -252,9 +269,10 @@ class WorkflowInspectorPanel(private val project: Project) : JBPanel<WorkflowIns
         // Clear UI
         eventHistoryTreePanel.clear()
 
-        // Reset checkbox state
+        // Reset checkbox and button state
         autoRefreshCheckbox.isSelected = false
         autoRefreshCheckbox.isEnabled = false
+        replayButton.isEnabled = false
         lastRefreshLabel.text = ""
     }
 
@@ -321,6 +339,7 @@ class WorkflowInspectorPanel(private val project: Project) : JBPanel<WorkflowIns
                     val (isNewEvent, shouldUpdateUi, eventsSnapshot) = synchronized(stateLock) {
                         val isNew = if (cachedEvents.none { it.eventId == event.eventId }) {
                             cachedEvents.add(event)
+                            cachedRawEvents.add(rawEvent)
                             true
                         } else {
                             false
@@ -567,6 +586,9 @@ class WorkflowInspectorPanel(private val project: Project) : JBPanel<WorkflowIns
         val isRunning = info.status == WorkflowStatus.RUNNING
         autoRefreshCheckbox.isEnabled = isRunning
 
+        // Enable replay button when workflow is loaded
+        replayButton.isEnabled = true
+
         // Set up query panel context
         queryPanel.setWorkflowContext(currentWorkflowId, currentRunId, workflowService)
 
@@ -596,37 +618,35 @@ class WorkflowInspectorPanel(private val project: Project) : JBPanel<WorkflowIns
                 indicator.text = "Fetching event history..."
                 indicator.isIndeterminate = true
 
-                val allEvents = mutableListOf<WorkflowHistoryEvent>()
-                var nextPageToken = com.google.protobuf.ByteString.EMPTY
-
-                // Load all pages of history
-                do {
-                    val result = service.getWorkflowHistory(workflowId, currentRunId, nextPageToken = nextPageToken)
-                    if (result.isFailure) {
-                        ApplicationManager.getApplication().invokeLater {
-                            eventHistoryTreePanel.clear()
-                        }
-                        return
+                // Get raw history (includes all events)
+                val historyResult = service.getRawHistory(workflowId, currentRunId)
+                if (historyResult.isFailure) {
+                    ApplicationManager.getApplication().invokeLater {
+                        eventHistoryTreePanel.clear()
+                        showError(historyResult.exceptionOrNull()?.message ?: "Failed to load history")
                     }
+                    return
+                }
 
-                    val historyPage = result.getOrNull()!!
-                    allEvents.addAll(historyPage.events)
-                    nextPageToken = historyPage.nextPageToken
+                val history = historyResult.getOrNull()!!
+                val rawEvents = history.eventsList
+                val parsedEvents = rawEvents.map { service.parseEvent(it) }
 
-                    indicator.text = "Loading history... ${allEvents.size} events"
-                } while (!nextPageToken.isEmpty)
+                indicator.text = "Loaded ${rawEvents.size} events"
 
-                // Populate both caches (synchronized)
+                // Populate all caches (synchronized)
                 synchronized(stateLock) {
                     cachedEvents.clear()
-                    cachedEvents.addAll(allEvents)
+                    cachedEvents.addAll(parsedEvents)
+                    cachedRawEvents.clear()
+                    cachedRawEvents.addAll(rawEvents)
                     displayedEvents.clear()
-                    displayedEvents.addAll(allEvents)
-                    lastNextToken = nextPageToken
+                    displayedEvents.addAll(parsedEvents)
+                    lastNextToken = com.google.protobuf.ByteString.EMPTY
                 }
 
                 ApplicationManager.getApplication().invokeLater {
-                    eventHistoryTreePanel.update(allEvents)
+                    eventHistoryTreePanel.update(parsedEvents)
                 }
             }
         })
@@ -639,10 +659,11 @@ class WorkflowInspectorPanel(private val project: Project) : JBPanel<WorkflowIns
             setDetailsVisible(false)
             refreshButton.isEnabled = true
 
-            // Disable live updates on error
+            // Disable live updates and replay on error
             stopLongPolling()
             autoRefreshCheckbox.isSelected = false
             autoRefreshCheckbox.isEnabled = false
+            replayButton.isEnabled = false
         }
     }
 
@@ -656,6 +677,42 @@ class WorkflowInspectorPanel(private val project: Project) : JBPanel<WorkflowIns
 
     fun collapseAllHistory() {
         eventHistoryTreePanel.collapseAll()
+    }
+
+    /**
+     * Start workflow replay for the currently loaded workflow.
+     * Uses the already-cached history instead of fetching again.
+     */
+    private fun startReplay() {
+        val workflowId = currentWorkflowId ?: return
+
+        // Get workflow type and raw history from cache
+        val (workflowType, rawHistory) = synchronized(stateLock) {
+            val type = cachedEvents.firstOrNull()?.details?.get("workflowType")
+            val history = if (cachedRawEvents.isNotEmpty()) {
+                History.newBuilder().addAllEvents(cachedRawEvents).build()
+            } else null
+            Pair(type, history)
+        }
+
+        if (workflowType == null) {
+            showError("Could not determine workflow type. Please load the workflow first.")
+            return
+        }
+
+        if (rawHistory == null || rawHistory.eventsCount == 0) {
+            showError("No history loaded. Please refresh the workflow first.")
+            return
+        }
+
+        WorkflowReplayService(project).replayWithCachedHistory(rawHistory, workflowType, workflowId)
+    }
+
+    /**
+     * Import workflow history from a JSON file and replay it.
+     */
+    private fun importHistoryFile() {
+        WorkflowReplayService(project).replayFromFile()
     }
 
     fun dispose() {

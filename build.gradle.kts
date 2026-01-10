@@ -20,12 +20,16 @@ val remoteRobotVersion = "0.11.23"
 dependencies {
     intellijPlatform {
         create(providers.gradleProperty("platformType"), providers.gradleProperty("platformVersion"))
+        bundledPlugin("com.intellij.java")
         pluginVerifier()
         zipSigner()
     }
 
     // Temporal SDK for server connectivity
     implementation("io.temporal:temporal-sdk:1.27.0")
+
+    // Temporal Testing for workflow replay
+    implementation("io.temporal:temporal-testing:1.27.0")
 
     // UI Testing with Remote-Robot
     testImplementation("com.intellij.remoterobot:remote-robot:$remoteRobotVersion")

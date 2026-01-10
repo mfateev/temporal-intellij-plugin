@@ -13,6 +13,7 @@
     ]]></description>
 
     <depends>com.intellij.modules.platform</depends>
+    <depends>com.intellij.modules.java</depends>
 
     <extensions defaultExtensionNs="com.intellij">
         <toolWindow id="Temporal"
@@ -25,6 +26,8 @@
                 id="io.temporal.intellij.settings"
                 displayName="Temporal"
                 nonDefaultProject="true"/>
+        <configurationType
+                implementation="io.temporal.intellij.replay.runconfig.WorkflowReplayRunConfigurationType"/>
     </extensions>
 
     <actions>

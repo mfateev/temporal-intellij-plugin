@@ -10,12 +10,15 @@ import com.google.protobuf.ByteString
 import io.temporal.api.common.v1.Payloads
 import io.temporal.api.common.v1.WorkflowExecution
 import io.temporal.api.enums.v1.EventType
+import io.temporal.api.enums.v1.HistoryEventFilterType
 import io.temporal.api.enums.v1.WorkflowExecutionStatus
+import io.temporal.api.history.v1.History
 import io.temporal.api.history.v1.HistoryEvent
 import io.temporal.api.query.v1.WorkflowQuery
 import io.temporal.api.workflowservice.v1.DescribeWorkflowExecutionRequest
 import io.temporal.api.workflowservice.v1.DescribeWorkflowExecutionResponse
 import io.temporal.api.workflowservice.v1.GetWorkflowExecutionHistoryRequest
+import io.temporal.api.workflowservice.v1.GetWorkflowExecutionHistoryResponse
 import io.temporal.api.workflowservice.v1.ListWorkflowExecutionsRequest
 import io.temporal.api.workflowservice.v1.QueryWorkflowRequest
 import io.temporal.api.workflowservice.v1.WorkflowServiceGrpc
@@ -180,14 +183,17 @@ class WorkflowService(private val settings: TemporalSettings.State) {
 
     /**
      * Get workflow execution history with optional pagination.
+     * @param waitNewEvent If true, uses long-poll semantics (blocks until new events or timeout).
+     *                     Required when using a token from a previous long-poll call.
      */
     fun getWorkflowHistory(
         workflowId: String,
         runId: String? = null,
         pageSize: Int = 100,
-        nextPageToken: ByteString = ByteString.EMPTY
+        nextPageToken: ByteString = ByteString.EMPTY,
+        waitNewEvent: Boolean = false
     ): Result<WorkflowHistoryPage> {
-        return getWorkflowHistoryInternal(workflowId, runId, pageSize, nextPageToken, waitNewEvent = false)
+        return getWorkflowHistoryInternal(workflowId, runId, pageSize, nextPageToken, waitNewEvent = waitNewEvent)
     }
 
     /**
@@ -226,6 +232,7 @@ class WorkflowService(private val settings: TemporalSettings.State) {
                 .setMaximumPageSize(pageSize)
                 .setNextPageToken(nextPageToken)
                 .setWaitNewEvent(waitNewEvent)
+                .setHistoryEventFilterType(HistoryEventFilterType.HISTORY_EVENT_FILTER_TYPE_ALL_EVENT)
                 .build()
 
             // Use a longer timeout for long polling
@@ -330,6 +337,103 @@ class WorkflowService(private val settings: TemporalSettings.State) {
      */
     fun getStackTrace(workflowId: String, runId: String? = null): Result<String> {
         return queryWorkflow(workflowId, runId, "__stack_trace")
+    }
+
+    /**
+     * Get the raw workflow execution history as a History proto object.
+     * This is useful for exporting history to JSON format for replay.
+     */
+    fun getRawHistory(workflowId: String, runId: String? = null): Result<History> {
+        val stub = this.stub ?: return Result.failure(IllegalStateException("Not connected"))
+
+        return try {
+            val executionBuilder = WorkflowExecution.newBuilder()
+                .setWorkflowId(workflowId)
+            if (!runId.isNullOrEmpty()) {
+                executionBuilder.setRunId(runId)
+            }
+
+            val allEvents = mutableListOf<HistoryEvent>()
+            var nextPageToken = ByteString.EMPTY
+
+            // Fetch all pages of history
+            do {
+                val request = GetWorkflowExecutionHistoryRequest.newBuilder()
+                    .setNamespace(settings.namespace)
+                    .setExecution(executionBuilder.build())
+                    .setMaximumPageSize(1000)
+                    .setNextPageToken(nextPageToken)
+                    .build()
+
+                val response = stub.getWorkflowExecutionHistory(request)
+                allEvents.addAll(response.history.eventsList)
+                nextPageToken = response.nextPageToken
+            } while (!nextPageToken.isEmpty)
+
+            Result.success(History.newBuilder().addAllEvents(allEvents).build())
+        } catch (e: StatusRuntimeException) {
+            val message = when (e.status.code) {
+                Status.Code.NOT_FOUND -> "Workflow not found: $workflowId"
+                Status.Code.UNAVAILABLE -> "Server unavailable"
+                Status.Code.DEADLINE_EXCEEDED -> "Request timed out"
+                Status.Code.PERMISSION_DENIED -> "Permission denied"
+                Status.Code.UNAUTHENTICATED -> "Authentication failed"
+                else -> "Error: ${e.status.description ?: e.message}"
+            }
+            Result.failure(WorkflowServiceException(message, e))
+        } catch (e: Exception) {
+            Result.failure(WorkflowServiceException("Error: ${e.message}", e))
+        }
+    }
+
+    /**
+     * Create an iterator for workflow history events with long polling support.
+     * The iterator handles pagination internally and blocks waiting for new events
+     * when caught up with the history.
+     *
+     * @param workflowId The workflow ID
+     * @param runId Optional run ID (uses latest if not specified)
+     * @param pageSize Number of events per page
+     * @param startToken Optional token to continue from a previous position
+     * @return A HistoryEventIterator that yields raw HistoryEvent objects
+     * @throws IllegalStateException if not connected
+     */
+    fun getHistoryIterator(
+        workflowId: String,
+        runId: String? = null,
+        pageSize: Int = 100,
+        startToken: ByteString = ByteString.EMPTY
+    ): HistoryEventIterator {
+        val stub = this.stub ?: throw IllegalStateException("Not connected")
+
+        val executionBuilder = WorkflowExecution.newBuilder()
+            .setWorkflowId(workflowId)
+        if (!runId.isNullOrEmpty()) {
+            executionBuilder.setRunId(runId)
+        }
+        val execution = executionBuilder.build()
+
+        return HistoryEventIterator(startToken) { nextToken ->
+            val request = GetWorkflowExecutionHistoryRequest.newBuilder()
+                .setNamespace(settings.namespace)
+                .setExecution(execution)
+                .setMaximumPageSize(pageSize)
+                .setNextPageToken(nextToken)
+                .setWaitNewEvent(true)
+                .setHistoryEventFilterType(HistoryEventFilterType.HISTORY_EVENT_FILTER_TYPE_ALL_EVENT)
+                .build()
+
+            // Use a longer timeout for long polling
+            val longPollStub = stub.withDeadlineAfter(70, TimeUnit.SECONDS)
+            longPollStub.getWorkflowExecutionHistory(request)
+        }
+    }
+
+    /**
+     * Parse a raw HistoryEvent to a WorkflowHistoryEvent with extracted details.
+     */
+    fun parseEvent(event: HistoryEvent): WorkflowHistoryEvent {
+        return parseHistoryEvent(event)
     }
 
     private fun parseHistoryEvent(event: HistoryEvent): WorkflowHistoryEvent {
