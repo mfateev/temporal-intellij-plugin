@@ -6,6 +6,7 @@ import com.intellij.openapi.diagnostic.Logger
 import com.intellij.openapi.project.Project
 import java.io.BufferedReader
 import java.io.InputStreamReader
+import java.net.InetAddress
 import java.net.ServerSocket
 import java.net.Socket
 import java.net.SocketTimeoutException
@@ -24,6 +25,7 @@ class ReplayStatusServer(private val project: Project) : Disposable {
     private var serverSocket: ServerSocket? = null
     private var listenerThread: Thread? = null
     private val running = AtomicBoolean(false)
+    private val clientConnected = AtomicBoolean(false)
 
     val port: Int
         get() = serverSocket?.localPort ?: -1
@@ -36,7 +38,8 @@ class ReplayStatusServer(private val project: Project) : Disposable {
             return port
         }
 
-        serverSocket = ServerSocket(0).apply {
+        // SECURITY: Bind to loopback only - prevents remote connections
+        serverSocket = ServerSocket(0, 1, InetAddress.getLoopbackAddress()).apply {
             soTimeout = 1000 // 1 second timeout for accept()
         }
         running.set(true)
@@ -46,7 +49,13 @@ class ReplayStatusServer(private val project: Project) : Disposable {
                 try {
                     val client = serverSocket?.accept()
                     if (client != null) {
-                        handleClient(client)
+                        // SECURITY: Accept only one client connection
+                        if (clientConnected.compareAndSet(false, true)) {
+                            handleClient(client)
+                        } else {
+                            LOG.warn("Rejecting additional connection from ${client.inetAddress}")
+                            client.close()
+                        }
                     }
                 } catch (e: SocketTimeoutException) {
                     // Expected - just retry accept()
@@ -120,6 +129,7 @@ class ReplayStatusServer(private val project: Project) : Disposable {
 
     fun stop() {
         running.set(false)
+        clientConnected.set(false)
         serverSocket?.close()
         serverSocket = null
         listenerThread?.interrupt()
