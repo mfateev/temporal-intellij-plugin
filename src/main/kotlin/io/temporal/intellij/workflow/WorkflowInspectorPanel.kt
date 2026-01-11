@@ -920,18 +920,9 @@ class PendingChildrenPanel : JBPanel<PendingChildrenPanel>(BorderLayout()) {
  * Subscribes to ReplayProgressListener to show replay progress.
  */
 class ReplayStatusPanel(private val project: Project) : JBPanel<ReplayStatusPanel>(BorderLayout()) {
-    private val contentPane = JEditorPane().apply {
-        contentType = "text/html"
-        isEditable = false
-        isOpaque = false
-        putClientProperty(JEditorPane.HONOR_DISPLAY_PROPERTIES, true)
-        addHyperlinkListener { e ->
-            if (e.eventType == javax.swing.event.HyperlinkEvent.EventType.ACTIVATED) {
-                val className = e.description
-                navigateToClass(className)
-            }
-        }
-    }
+    private val statusLabel = JBLabel()
+    private val workflowLink = com.intellij.ui.HyperlinkLabel()
+    private val errorLabel = JBLabel()
     private var currentStatus: ReplayState = ReplayState.READY
 
     private enum class ReplayState {
@@ -944,7 +935,34 @@ class ReplayStatusPanel(private val project: Project) : JBPanel<ReplayStatusPane
 
     init {
         border = JBUI.Borders.empty(5)
-        add(contentPane, BorderLayout.CENTER)
+
+        // Set up hyperlink click handler
+        workflowLink.addHyperlinkListener {
+            navigateToClass(lastWorkflowType)
+        }
+
+        // Layout
+        val contentPanel = JBPanel<JBPanel<*>>(java.awt.GridBagLayout())
+        val gbc = java.awt.GridBagConstraints().apply {
+            anchor = java.awt.GridBagConstraints.WEST
+            insets = java.awt.Insets(2, 5, 2, 5)
+        }
+
+        // Status row
+        gbc.gridx = 0; gbc.gridy = 0; gbc.gridwidth = 2
+        contentPanel.add(statusLabel, gbc)
+
+        // Workflow row
+        gbc.gridx = 0; gbc.gridy = 1; gbc.gridwidth = 1
+        contentPanel.add(JBLabel("<html><b>Workflow:</b></html>"), gbc)
+        gbc.gridx = 1
+        contentPanel.add(workflowLink, gbc)
+
+        // Error row
+        gbc.gridx = 0; gbc.gridy = 2; gbc.gridwidth = 2
+        contentPanel.add(errorLabel, gbc)
+
+        add(contentPanel, BorderLayout.CENTER)
         updateDisplay()
 
         // Subscribe to replay progress events
@@ -970,6 +988,7 @@ class ReplayStatusPanel(private val project: Project) : JBPanel<ReplayStatusPane
     }
 
     private fun navigateToClass(className: String) {
+        if (className.isEmpty()) return
         ApplicationManager.getApplication().runReadAction {
             val psiClass = JavaPsiFacade.getInstance(project)
                 .findClass(className, GlobalSearchScope.allScope(project))
@@ -983,43 +1002,31 @@ class ReplayStatusPanel(private val project: Project) : JBPanel<ReplayStatusPane
 
     private fun updateDisplay() {
         val (statusText, statusColor) = when (currentStatus) {
-            ReplayState.READY -> "Ready" to "#757575"
-            ReplayState.REPLAYING -> "Replaying..." to "#2196F3"
-            ReplayState.SUCCESS -> "Success" to "#4CAF50"
-            ReplayState.FAILED -> "Failed" to "#f44336"
+            ReplayState.READY -> "Ready" to JBColor.GRAY
+            ReplayState.REPLAYING -> "Replaying..." to JBColor.BLUE
+            ReplayState.SUCCESS -> "Success" to JBColor(0x4CAF50, 0x4CAF50)
+            ReplayState.FAILED -> "Failed" to JBColor.RED
         }
 
-        // Create clickable link for workflow class
-        val workflowLink = if (lastWorkflowType.isNotEmpty()) {
+        statusLabel.text = "<html><b style='font-size: 1.1em;'>▼ REPLAY STATUS</b></html>"
+        statusLabel.foreground = statusColor
+
+        // Update workflow link
+        if (lastWorkflowType.isNotEmpty() && currentStatus != ReplayState.READY) {
             val simpleName = lastWorkflowType.substringAfterLast('.')
-            "<a href='$lastWorkflowType'>${escapeHtml(simpleName)}</a>"
-        } else ""
-
-        val details = when (currentStatus) {
-            ReplayState.READY -> ""
-            ReplayState.REPLAYING -> "<tr><td><b>Workflow:</b></td><td>$workflowLink</td></tr>"
-            ReplayState.SUCCESS -> "<tr><td><b>Workflow:</b></td><td>$workflowLink</td></tr>"
-            ReplayState.FAILED -> """
-                <tr><td><b>Workflow:</b></td><td>$workflowLink</td></tr>
-                <tr><td><b>Error:</b></td><td style='color: #f44336;'>${escapeHtml(lastErrorMessage ?: "Unknown error")}</td></tr>
-            """.trimIndent()
+            workflowLink.setHyperlinkText(simpleName)
+            workflowLink.isVisible = true
+        } else {
+            workflowLink.isVisible = false
         }
 
-        contentPane.text = """
-            <html>
-            <body style='font-family: sans-serif;'>
-            <table cellpadding='3'>
-                <tr>
-                    <td colspan='2'><b style='font-size: 1.1em;'>▼ REPLAY STATUS</b>
-                    <span style='background-color: $statusColor; color: white; padding: 2px 6px; border-radius: 3px; margin-left: 10px;'>
-                        $statusText
-                    </span></td>
-                </tr>
-                $details
-            </table>
-            </body>
-            </html>
-        """.trimIndent().trim()
+        // Update error label
+        if (currentStatus == ReplayState.FAILED && lastErrorMessage != null) {
+            errorLabel.text = "<html><b>Error:</b> <font color='#f44336'>${escapeHtml(lastErrorMessage!!)}</font></html>"
+            errorLabel.isVisible = true
+        } else {
+            errorLabel.isVisible = false
+        }
     }
 
     private fun escapeHtml(text: String): String {
