@@ -937,9 +937,11 @@ class ReplayStatusPanel(private val project: Project) : JBPanel<ReplayStatusPane
         border = JBUI.Borders.empty(5)
 
         // Set up hyperlink click handler
-        workflowLink.addHyperlinkListener {
-            navigateToClass(lastWorkflowType)
-        }
+        workflowLink.addHyperlinkListener(javax.swing.event.HyperlinkListener { e ->
+            if (e.eventType == javax.swing.event.HyperlinkEvent.EventType.ACTIVATED) {
+                navigateToClass(lastWorkflowType)
+            }
+        })
 
         // Layout
         val contentPanel = JBPanel<JBPanel<*>>(java.awt.GridBagLayout())
@@ -989,12 +991,17 @@ class ReplayStatusPanel(private val project: Project) : JBPanel<ReplayStatusPane
 
     private fun navigateToClass(className: String) {
         if (className.isEmpty()) return
-        ApplicationManager.getApplication().runReadAction {
-            val psiClass = JavaPsiFacade.getInstance(project)
-                .findClass(className, GlobalSearchScope.allScope(project))
-            if (psiClass != null) {
-                ApplicationManager.getApplication().invokeLater {
-                    psiClass.navigate(true)
+        ApplicationManager.getApplication().executeOnPooledThread {
+            ApplicationManager.getApplication().runReadAction {
+                val psiClass = JavaPsiFacade.getInstance(project)
+                    .findClass(className, GlobalSearchScope.allScope(project))
+                if (psiClass != null) {
+                    val navElement = psiClass.navigationElement
+                    if (navElement is com.intellij.pom.Navigatable && navElement.canNavigate()) {
+                        ApplicationManager.getApplication().invokeLater {
+                            navElement.navigate(true)
+                        }
+                    }
                 }
             }
         }
