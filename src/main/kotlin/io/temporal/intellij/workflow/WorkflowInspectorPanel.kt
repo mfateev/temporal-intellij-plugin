@@ -929,7 +929,6 @@ class ReplayStatusPanel(private val project: Project) : JBPanel<ReplayStatusPane
         READY, REPLAYING, SUCCESS, FAILED
     }
 
-    private var lastWorkflowId: String = ""
     private var lastWorkflowType: String = ""
     private var lastErrorMessage: String? = null
 
@@ -966,7 +965,6 @@ class ReplayStatusPanel(private val project: Project) : JBPanel<ReplayStatusPane
             object : ReplayProgressListener {
                 override fun onReplayStarted(workflowId: String, workflowType: String) {
                     currentStatus = ReplayState.REPLAYING
-                    lastWorkflowId = workflowId
                     lastWorkflowType = workflowType
                     lastErrorMessage = null
                     ApplicationManager.getApplication().invokeLater { updateDisplay() }
@@ -974,7 +972,6 @@ class ReplayStatusPanel(private val project: Project) : JBPanel<ReplayStatusPane
 
                 override fun onReplayFinished(workflowId: String, success: Boolean, errorMessage: String?) {
                     currentStatus = if (success) ReplayState.SUCCESS else ReplayState.FAILED
-                    lastWorkflowId = workflowId
                     lastErrorMessage = errorMessage
                     ApplicationManager.getApplication().invokeLater { updateDisplay() }
                 }
@@ -1015,18 +1012,18 @@ class ReplayStatusPanel(private val project: Project) : JBPanel<ReplayStatusPane
 
     private fun updateDisplay() {
         val (statusText, statusColor) = when (currentStatus) {
-            ReplayState.READY -> "Ready" to JBColor.GRAY
-            ReplayState.REPLAYING -> "Replaying..." to JBColor.BLUE
-            ReplayState.SUCCESS -> "Success" to JBColor(0x4CAF50, 0x4CAF50)
-            ReplayState.FAILED -> "Failed" to JBColor.RED
+            ReplayState.READY -> "Ready" to "#757575"
+            ReplayState.REPLAYING -> "Replaying..." to "#2196F3"
+            ReplayState.SUCCESS -> "Success" to "#4CAF50"
+            ReplayState.FAILED -> "Failed" to "#f44336"
         }
 
-        statusLabel.text = "<html><b style='font-size: 1.1em;'>▼ REPLAY STATUS</b></html>"
-        statusLabel.foreground = statusColor
+        statusLabel.text = "<html><b style='font-size: 1.1em;'>▼ REPLAY STATUS</b> " +
+            "<span style='color: $statusColor;'>[$statusText]</span></html>"
 
-        // Update workflow link
+        // Update workflow link - extract simple name (handles both . and $ separators)
         if (lastWorkflowType.isNotEmpty() && currentStatus != ReplayState.READY) {
-            val simpleName = lastWorkflowType.substringAfterLast('.')
+            val simpleName = lastWorkflowType.substringAfterLast('.').substringAfterLast('$')
             workflowLink.text = simpleName
             workflowLink.isVisible = true
         } else {
