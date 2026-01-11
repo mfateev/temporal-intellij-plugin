@@ -985,25 +985,40 @@ class ReplayStatusPanel(private val project: Project) : JBPanel<ReplayStatusPane
     private fun navigateToClass(className: String) {
         if (className.isEmpty()) return
 
+        println("DEBUG: navigateToClass called with: $className")
+
         // Run PSI lookup on background thread to avoid blocking EDT
         ApplicationManager.getApplication().executeOnPooledThread {
+            println("DEBUG: Running on pooled thread")
             com.intellij.openapi.application.ReadAction.run<RuntimeException> {
+                println("DEBUG: Inside ReadAction")
                 val psiClass = JavaPsiFacade.getInstance(project)
                     .findClass(className, GlobalSearchScope.allScope(project))
 
+                println("DEBUG: psiClass = $psiClass")
+
                 if (psiClass == null) {
+                    println("DEBUG: Class not found: $className")
                     return@run
                 }
 
                 val navigatable = psiClass.navigationElement as? com.intellij.pom.Navigatable
                 val vFile = psiClass.containingFile?.virtualFile
 
+                println("DEBUG: navigatable = $navigatable, canNavigate = ${navigatable?.canNavigate()}")
+                println("DEBUG: vFile = $vFile")
+
                 // Navigate on EDT
                 ApplicationManager.getApplication().invokeLater {
+                    println("DEBUG: Inside invokeLater")
                     if (navigatable != null && navigatable.canNavigate()) {
+                        println("DEBUG: Calling navigatable.navigate(true)")
                         navigatable.navigate(true)
                     } else if (vFile != null) {
+                        println("DEBUG: Calling OpenFileDescriptor.navigate(true)")
                         com.intellij.openapi.fileEditor.OpenFileDescriptor(project, vFile).navigate(true)
+                    } else {
+                        println("DEBUG: No navigation path available")
                     }
                 }
             }
