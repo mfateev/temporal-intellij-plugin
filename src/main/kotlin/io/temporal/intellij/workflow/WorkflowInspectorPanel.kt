@@ -988,7 +988,7 @@ class ReplayStatusPanel(project: Project) : JBPanel<ReplayStatusPanel>(BorderLay
             </table>
             </body>
             </html>
-        """.trimIndent()
+        """.trimIndent().trim()
     }
 
     private fun escapeHtml(text: String): String {
