@@ -6,6 +6,8 @@ import com.intellij.openapi.progress.ProgressIndicator
 import com.intellij.openapi.progress.ProgressManager
 import com.intellij.openapi.progress.Task
 import com.intellij.openapi.project.Project
+import com.intellij.psi.JavaPsiFacade
+import com.intellij.psi.search.GlobalSearchScope
 import com.intellij.ui.JBColor
 import com.intellij.ui.components.JBLabel
 import com.intellij.ui.components.JBPanel
@@ -917,8 +919,19 @@ class PendingChildrenPanel : JBPanel<PendingChildrenPanel>(BorderLayout()) {
  * Panel showing replay status.
  * Subscribes to ReplayProgressListener to show replay progress.
  */
-class ReplayStatusPanel(project: Project) : JBPanel<ReplayStatusPanel>(BorderLayout()) {
-    private val contentLabel = JBLabel()
+class ReplayStatusPanel(private val project: Project) : JBPanel<ReplayStatusPanel>(BorderLayout()) {
+    private val contentPane = JEditorPane().apply {
+        contentType = "text/html"
+        isEditable = false
+        isOpaque = false
+        putClientProperty(JEditorPane.HONOR_DISPLAY_PROPERTIES, true)
+        addHyperlinkListener { e ->
+            if (e.eventType == javax.swing.event.HyperlinkEvent.EventType.ACTIVATED) {
+                val className = e.description
+                navigateToClass(className)
+            }
+        }
+    }
     private var currentStatus: ReplayState = ReplayState.READY
 
     private enum class ReplayState {
@@ -931,7 +944,7 @@ class ReplayStatusPanel(project: Project) : JBPanel<ReplayStatusPanel>(BorderLay
 
     init {
         border = JBUI.Borders.empty(5)
-        add(contentLabel, BorderLayout.CENTER)
+        add(contentPane, BorderLayout.CENTER)
         updateDisplay()
 
         // Subscribe to replay progress events
@@ -956,6 +969,14 @@ class ReplayStatusPanel(project: Project) : JBPanel<ReplayStatusPanel>(BorderLay
         )
     }
 
+    private fun navigateToClass(className: String) {
+        val psiClass = JavaPsiFacade.getInstance(project)
+            .findClass(className, GlobalSearchScope.allScope(project))
+        if (psiClass != null) {
+            psiClass.navigate(true)
+        }
+    }
+
     private fun updateDisplay() {
         val (statusText, statusColor) = when (currentStatus) {
             ReplayState.READY -> "Ready" to "#757575"
@@ -964,17 +985,23 @@ class ReplayStatusPanel(project: Project) : JBPanel<ReplayStatusPanel>(BorderLay
             ReplayState.FAILED -> "Failed" to "#f44336"
         }
 
+        // Create clickable link for workflow class
+        val workflowLink = if (lastWorkflowType.isNotEmpty()) {
+            val simpleName = lastWorkflowType.substringAfterLast('.')
+            "<a href='$lastWorkflowType'>${escapeHtml(simpleName)}</a>"
+        } else ""
+
         val details = when (currentStatus) {
             ReplayState.READY -> ""
-            ReplayState.REPLAYING -> "<tr><td><b>Workflow:</b></td><td>${escapeHtml(lastWorkflowType)}</td></tr>"
-            ReplayState.SUCCESS -> "<tr><td><b>Workflow:</b></td><td>${escapeHtml(lastWorkflowId)}</td></tr>"
+            ReplayState.REPLAYING -> "<tr><td><b>Workflow:</b></td><td>$workflowLink</td></tr>"
+            ReplayState.SUCCESS -> "<tr><td><b>Workflow:</b></td><td>$workflowLink</td></tr>"
             ReplayState.FAILED -> """
-                <tr><td><b>Workflow:</b></td><td>${escapeHtml(lastWorkflowId)}</td></tr>
+                <tr><td><b>Workflow:</b></td><td>$workflowLink</td></tr>
                 <tr><td><b>Error:</b></td><td style='color: #f44336;'>${escapeHtml(lastErrorMessage ?: "Unknown error")}</td></tr>
             """.trimIndent()
         }
 
-        contentLabel.text = """
+        contentPane.text = """
             <html>
             <body style='font-family: sans-serif;'>
             <table cellpadding='3'>
