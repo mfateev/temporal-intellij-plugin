@@ -970,10 +970,14 @@ class ReplayStatusPanel(private val project: Project) : JBPanel<ReplayStatusPane
     }
 
     private fun navigateToClass(className: String) {
-        val psiClass = JavaPsiFacade.getInstance(project)
-            .findClass(className, GlobalSearchScope.allScope(project))
-        if (psiClass != null) {
-            psiClass.navigate(true)
+        ApplicationManager.getApplication().runReadAction {
+            val psiClass = JavaPsiFacade.getInstance(project)
+                .findClass(className, GlobalSearchScope.allScope(project))
+            if (psiClass != null) {
+                ApplicationManager.getApplication().invokeLater {
+                    psiClass.navigate(true)
+                }
+            }
         }
     }
 
