@@ -18,9 +18,12 @@ private val LOG = Logger.getInstance(ReplayStatusServer::class.java)
  * Server that receives replay status updates from the replay process.
  *
  * Protocol: Each line is a JSON message with format:
- * {"type": "STARTED|FINISHED|FAILED|EVENT", "workflowId": "...", "workflowType": "...", "eventId": N, "error": "..."}
+ * {"type": "HANDSHAKE|STARTED|FINISHED|FAILED|EVENT", "token": "...", "workflowId": "...", "workflowType": "...", "eventId": N, "error": "..."}
+ *
+ * SECURITY: The first message MUST be a HANDSHAKE with a valid token.
+ * Connections that fail handshake validation are immediately closed.
  */
-class ReplayStatusServer(private val project: Project) : Disposable {
+class ReplayStatusServer(private val project: Project, private val expectedToken: String) : Disposable {
 
     private var serverSocket: ServerSocket? = null
     private var listenerThread: Thread? = null
@@ -78,6 +81,16 @@ class ReplayStatusServer(private val project: Project) : Disposable {
             try {
                 client.use { socket ->
                     val reader = BufferedReader(InputStreamReader(socket.getInputStream()))
+
+                    // SECURITY: First message must be a valid handshake
+                    val handshake = reader.readLine()
+                    if (handshake == null || !validateHandshake(handshake)) {
+                        LOG.warn("Invalid handshake from ${socket.inetAddress}, closing connection")
+                        return@Thread
+                    }
+                    LOG.info("Handshake validated, accepting replay status messages")
+
+                    // Process remaining messages
                     var line: String?
                     while (reader.readLine().also { line = it } != null) {
                         line?.let { processMessage(it) }
@@ -87,6 +100,27 @@ class ReplayStatusServer(private val project: Project) : Disposable {
                 LOG.warn("Error handling client", e)
             }
         }, "ReplayStatusClient").start()
+    }
+
+    /**
+     * Validate the handshake message.
+     * Expected format: {"type":"HANDSHAKE","token":"<expected-token>"}
+     */
+    private fun validateHandshake(json: String): Boolean {
+        val type = extractJsonString(json, "type")
+        val token = extractJsonString(json, "token")
+
+        if (type != "HANDSHAKE") {
+            LOG.warn("Expected HANDSHAKE message, got: $type")
+            return false
+        }
+
+        if (token != expectedToken) {
+            LOG.warn("Invalid handshake token")
+            return false
+        }
+
+        return true
     }
 
     private fun processMessage(json: String) {

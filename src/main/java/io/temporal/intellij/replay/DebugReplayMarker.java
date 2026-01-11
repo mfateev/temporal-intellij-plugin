@@ -10,11 +10,14 @@ import java.net.Socket;
  * send JSON messages to the IntelliJ plugin via socket.
  *
  * Protocol: Each message is a JSON line with format:
- * {"type": "STARTED|FINISHED|FAILED|EVENT", "workflowId": "...", "workflowType": "...", "eventId": N, "error": "..."}
+ * {"type": "HANDSHAKE|STARTED|FINISHED|FAILED|EVENT", "token": "...", "workflowId": "...", "workflowType": "...", "eventId": N, "error": "..."}
+ *
+ * SECURITY: The first message sent is always a HANDSHAKE with the token from system property.
  */
 public final class DebugReplayMarker {
 
     private static final String PORT_PROPERTY = "temporal.replay.status.port";
+    private static final String TOKEN_PROPERTY = "temporal.replay.status.token";
     private static PrintWriter writer;
     private static Socket socket;
 
@@ -23,6 +26,7 @@ public final class DebugReplayMarker {
     /**
      * Initialize connection to the status server.
      * Called automatically on first status message.
+     * Sends HANDSHAKE as the first message for authentication.
      */
     private static synchronized void ensureConnected() {
         if (writer != null) {
@@ -34,10 +38,22 @@ public final class DebugReplayMarker {
             return;
         }
 
+        String token = System.getProperty(TOKEN_PROPERTY);
+        if (token == null || token.isEmpty()) {
+            System.err.println("No replay status token configured");
+            return;
+        }
+
         try {
             int port = Integer.parseInt(portStr);
             socket = new Socket("localhost", port);
             writer = new PrintWriter(socket.getOutputStream(), true);
+
+            // SECURITY: Send handshake with token as first message
+            writer.println(String.format(
+                "{\"type\":\"HANDSHAKE\",\"token\":\"%s\"}",
+                escape(token)
+            ));
         } catch (Exception e) {
             System.err.println("Failed to connect to replay status server: " + e.getMessage());
         }

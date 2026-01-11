@@ -12,6 +12,7 @@ import com.intellij.openapi.roots.OrderEnumerator
 import io.temporal.intellij.replay.ReplayStatusServer
 import java.io.File
 import java.nio.file.Files
+import java.util.UUID
 
 /**
  * Run state that executes the workflow replay using the user's project classpath.
@@ -28,6 +29,7 @@ class WorkflowReplayRunState(
     companion object {
         private const val RUNNER_CLASS = "io.temporal.intellij.replay.WorkflowReplayRunner"
         private const val PORT_PROPERTY = "temporal.replay.status.port"
+        private const val TOKEN_PROPERTY = "temporal.replay.status.token"
         private val RUNNER_CLASSES = listOf(
             "io/temporal/intellij/replay/WorkflowReplayRunner.class",
             "io/temporal/intellij/replay/DebugReplayMarker.class"
@@ -90,12 +92,16 @@ class WorkflowReplayRunState(
         // Main class - the replay runner
         params.mainClass = RUNNER_CLASS
 
+        // Generate a random token for handshake validation
+        val token = UUID.randomUUID().toString()
+
         // Start status server for replay progress reporting
-        statusServer = ReplayStatusServer(environment.project)
+        statusServer = ReplayStatusServer(environment.project, token)
         val port = statusServer!!.start()
 
-        // Pass the status server port as a system property
+        // Pass the status server port and token as system properties
         params.vmParametersList.add("-D$PORT_PROPERTY=$port")
+        params.vmParametersList.add("-D$TOKEN_PROPERTY=$token")
 
         // Pass arguments
         params.programParametersList.add("--workflow-class")
