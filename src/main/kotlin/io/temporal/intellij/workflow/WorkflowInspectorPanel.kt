@@ -966,11 +966,11 @@ class ReplayStatusPanel(project: Project) : JBPanel<ReplayStatusPanel>(BorderLay
 
         val details = when (currentStatus) {
             ReplayState.READY -> ""
-            ReplayState.REPLAYING -> "<tr><td><b>Workflow:</b></td><td>$lastWorkflowType</td></tr>"
-            ReplayState.SUCCESS -> "<tr><td><b>Workflow:</b></td><td>$lastWorkflowId</td></tr>"
+            ReplayState.REPLAYING -> "<tr><td><b>Workflow:</b></td><td>${escapeHtml(lastWorkflowType)}</td></tr>"
+            ReplayState.SUCCESS -> "<tr><td><b>Workflow:</b></td><td>${escapeHtml(lastWorkflowId)}</td></tr>"
             ReplayState.FAILED -> """
-                <tr><td><b>Workflow:</b></td><td>$lastWorkflowId</td></tr>
-                <tr><td><b>Error:</b></td><td style='color: #f44336;'>${lastErrorMessage ?: "Unknown error"}</td></tr>
+                <tr><td><b>Workflow:</b></td><td>${escapeHtml(lastWorkflowId)}</td></tr>
+                <tr><td><b>Error:</b></td><td style='color: #f44336;'>${escapeHtml(lastErrorMessage ?: "Unknown error")}</td></tr>
             """.trimIndent()
         }
 
@@ -989,5 +989,13 @@ class ReplayStatusPanel(project: Project) : JBPanel<ReplayStatusPanel>(BorderLay
             </body>
             </html>
         """.trimIndent()
+    }
+
+    private fun escapeHtml(text: String): String {
+        return text
+            .replace("&", "&amp;")
+            .replace("<", "&lt;")
+            .replace(">", "&gt;")
+            .replace("\"", "&quot;")
     }
 }
