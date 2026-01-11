@@ -921,7 +921,7 @@ class PendingChildrenPanel : JBPanel<PendingChildrenPanel>(BorderLayout()) {
  */
 class ReplayStatusPanel(private val project: Project) : JBPanel<ReplayStatusPanel>(BorderLayout()) {
     private val statusLabel = JBLabel()
-    private val workflowLink = com.intellij.ui.HyperlinkLabel()
+    private val workflowLink = JBLabel()
     private val errorLabel = JBLabel()
     private var currentStatus: ReplayState = ReplayState.READY
 
@@ -936,10 +936,13 @@ class ReplayStatusPanel(private val project: Project) : JBPanel<ReplayStatusPane
     init {
         border = JBUI.Borders.empty(5)
 
-        // Set up hyperlink click handler
-        workflowLink.addHyperlinkListener(javax.swing.event.HyperlinkListener { e ->
-            if (e.eventType == javax.swing.event.HyperlinkEvent.EventType.ACTIVATED) {
-                navigateToClass(lastWorkflowType)
+        // Set up hyperlink click handler with simple mouse listener
+        workflowLink.cursor = java.awt.Cursor.getPredefinedCursor(java.awt.Cursor.HAND_CURSOR)
+        workflowLink.addMouseListener(object : java.awt.event.MouseAdapter() {
+            override fun mouseClicked(e: java.awt.event.MouseEvent) {
+                if (lastWorkflowType.isNotEmpty()) {
+                    navigateToClass(lastWorkflowType)
+                }
             }
         })
 
@@ -1021,7 +1024,7 @@ class ReplayStatusPanel(private val project: Project) : JBPanel<ReplayStatusPane
         // Update workflow link
         if (lastWorkflowType.isNotEmpty() && currentStatus != ReplayState.READY) {
             val simpleName = lastWorkflowType.substringAfterLast('.')
-            workflowLink.setHyperlinkText(simpleName)
+            workflowLink.text = "<html><a href='#'>$simpleName</a></html>"
             workflowLink.isVisible = true
         } else {
             workflowLink.isVisible = false
