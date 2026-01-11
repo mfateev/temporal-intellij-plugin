@@ -984,18 +984,24 @@ class ReplayStatusPanel(private val project: Project) : JBPanel<ReplayStatusPane
 
     private fun navigateToClass(className: String) {
         if (className.isEmpty()) return
-        ApplicationManager.getApplication().executeOnPooledThread {
-            ApplicationManager.getApplication().runReadAction {
-                val psiClass = JavaPsiFacade.getInstance(project)
-                    .findClass(className, GlobalSearchScope.allScope(project))
-                if (psiClass != null) {
-                    val navElement = psiClass.navigationElement
-                    if (navElement is com.intellij.pom.Navigatable && navElement.canNavigate()) {
-                        ApplicationManager.getApplication().invokeLater {
-                            navElement.navigate(true)
-                        }
-                    }
-                }
+        com.intellij.openapi.application.ReadAction.run<RuntimeException> {
+            val psiClass = JavaPsiFacade.getInstance(project)
+                .findClass(className, GlobalSearchScope.allScope(project))
+
+            if (psiClass == null) {
+                return@run
+            }
+
+            val navigatable = psiClass.navigationElement as? com.intellij.pom.Navigatable
+            if (navigatable != null && navigatable.canNavigate()) {
+                navigatable.navigate(true)
+                return@run
+            }
+
+            // Fallback to OpenFileDescriptor
+            val vFile = psiClass.containingFile?.virtualFile
+            if (vFile != null) {
+                com.intellij.openapi.fileEditor.OpenFileDescriptor(project, vFile).navigate(true)
             }
         }
     }
