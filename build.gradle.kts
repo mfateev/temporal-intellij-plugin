@@ -117,8 +117,8 @@ val runIdeForUiTests by intellijPlatformTesting.runIde.registering {
                 "-Djb.consents.confirmation.enabled=false",
             )
         }
-        // Open a test project automatically
-        args = listOf(projectDir.resolve("testProject").absolutePath)
+        // Open a test project automatically (in task directory, not plugin source)
+        args = listOf(projectDir.parentFile.resolve("testProject").absolutePath)
     }
     plugins {
         robotServerPlugin()

@@ -2,6 +2,7 @@ package io.temporal.intellij.replay
 
 import com.intellij.execution.ProgramRunnerUtil
 import com.intellij.execution.RunManager
+import com.intellij.execution.executors.DefaultDebugExecutor
 import com.intellij.execution.executors.DefaultRunExecutor
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.fileChooser.FileChooser
@@ -30,13 +31,20 @@ class WorkflowReplayService(private val project: Project) {
     /**
      * Replay using already-cached history (no server fetch needed).
      * Exports the cached history to a temp file and launches replay.
+     *
+     * @param history The workflow history to replay
+     * @param workflowType The workflow type name
+     * @param workflowId The workflow ID (used for display)
+     * @param debug If true, launches in debug mode with debugger attached
      */
     fun replayWithCachedHistory(
         history: History,
         workflowType: String,
-        workflowId: String
+        workflowId: String,
+        debug: Boolean = false
     ) {
-        ProgressManager.getInstance().run(object : Task.Backgroundable(project, "Preparing Workflow Replay") {
+        val taskTitle = if (debug) "Preparing Workflow Debug Replay" else "Preparing Workflow Replay"
+        ProgressManager.getInstance().run(object : Task.Backgroundable(project, taskTitle) {
             override fun run(indicator: ProgressIndicator) {
                 indicator.text = "Finding workflow implementation..."
                 indicator.isIndeterminate = true
@@ -61,7 +69,8 @@ class WorkflowReplayService(private val project: Project) {
                                     historyFilePath = historyFile.absolutePath,
                                     workflowClassName = impl.qualifiedName,
                                     configName = "Replay: $workflowId",
-                                    psiClass = impl.psiClass
+                                    psiClass = impl.psiClass,
+                                    debug = debug
                                 )
                             }
                             else -> {
@@ -72,7 +81,8 @@ class WorkflowReplayService(private val project: Project) {
                                             historyFilePath = historyFile.absolutePath,
                                             workflowClassName = impl.qualifiedName,
                                             configName = "Replay: $workflowId",
-                                            psiClass = impl.psiClass
+                                            psiClass = impl.psiClass,
+                                            debug = debug
                                         )
                                     }
                                 }
@@ -251,12 +261,19 @@ class WorkflowReplayService(private val project: Project) {
 
     /**
      * Create and execute a workflow replay run configuration.
+     *
+     * @param historyFilePath Path to the history JSON file
+     * @param workflowClassName Fully qualified workflow class name
+     * @param configName Name for the run configuration
+     * @param psiClass Optional PSI class for module resolution
+     * @param debug If true, launches with debugger attached
      */
     private fun createAndRunConfiguration(
         historyFilePath: String,
         workflowClassName: String,
         configName: String,
-        psiClass: PsiClass? = null
+        psiClass: PsiClass? = null,
+        debug: Boolean = false
     ) {
         val runManager = RunManager.getInstance(project)
         val configurationType = WorkflowReplayRunConfigurationType()
@@ -289,7 +306,13 @@ class WorkflowReplayService(private val project: Project) {
         runManager.addConfiguration(settings)
         runManager.selectedConfiguration = settings
 
-        ProgramRunnerUtil.executeConfiguration(settings, DefaultRunExecutor.getRunExecutorInstance())
+        // Execute with appropriate executor (Run or Debug)
+        val executor = if (debug) {
+            DefaultDebugExecutor.getDebugExecutorInstance()
+        } else {
+            DefaultRunExecutor.getRunExecutorInstance()
+        }
+        ProgramRunnerUtil.executeConfiguration(settings, executor)
     }
 
     private fun showError(message: String) {

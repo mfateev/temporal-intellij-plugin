@@ -4,7 +4,8 @@
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-TEST_PROJECT_DIR="$SCRIPT_DIR/testProject"
+# Test project goes in task directory (parent), not plugin source directory
+TEST_PROJECT_DIR="$SCRIPT_DIR/../testProject"
 SAMPLES_REPO="https://github.com/temporalio/samples-java.git"
 
 if [ -d "$TEST_PROJECT_DIR" ]; then

@@ -51,6 +51,7 @@ class WorkflowInspectorPanel(private val project: Project) : JBPanel<WorkflowIns
     private val runIdField = JBTextField(36)  // UUID length
     private val refreshButton = JButton("Refresh")
     private val replayButton = JButton("Replay")
+    private val debugReplayButton = JButton("Debug")
     private val importHistoryButton = JButton("Import JSON...")
 
     // Display components
@@ -172,8 +173,13 @@ class WorkflowInspectorPanel(private val project: Project) : JBPanel<WorkflowIns
 
         replayButton.toolTipText = "Replay this workflow against local implementation"
         replayButton.isEnabled = false
-        replayButton.addActionListener { startReplay() }
+        replayButton.addActionListener { startReplay(debug = false) }
         row3.add(replayButton)
+
+        debugReplayButton.toolTipText = "Replay with debugger attached - set breakpoints in your workflow code"
+        debugReplayButton.isEnabled = false
+        debugReplayButton.addActionListener { startReplay(debug = true) }
+        row3.add(debugReplayButton)
 
         importHistoryButton.toolTipText = "Import workflow history from JSON file and replay"
         importHistoryButton.addActionListener { importHistoryFile() }
@@ -273,6 +279,7 @@ class WorkflowInspectorPanel(private val project: Project) : JBPanel<WorkflowIns
         autoRefreshCheckbox.isSelected = false
         autoRefreshCheckbox.isEnabled = false
         replayButton.isEnabled = false
+        debugReplayButton.isEnabled = false
         lastRefreshLabel.text = ""
     }
 
@@ -586,8 +593,9 @@ class WorkflowInspectorPanel(private val project: Project) : JBPanel<WorkflowIns
         val isRunning = info.status == WorkflowStatus.RUNNING
         autoRefreshCheckbox.isEnabled = isRunning
 
-        // Enable replay button when workflow is loaded
+        // Enable replay buttons when workflow is loaded
         replayButton.isEnabled = true
+        debugReplayButton.isEnabled = true
 
         // Set up query panel context
         queryPanel.setWorkflowContext(currentWorkflowId, currentRunId, workflowService)
@@ -664,6 +672,7 @@ class WorkflowInspectorPanel(private val project: Project) : JBPanel<WorkflowIns
             autoRefreshCheckbox.isSelected = false
             autoRefreshCheckbox.isEnabled = false
             replayButton.isEnabled = false
+            debugReplayButton.isEnabled = false
         }
     }
 
@@ -683,7 +692,7 @@ class WorkflowInspectorPanel(private val project: Project) : JBPanel<WorkflowIns
      * Start workflow replay for the currently loaded workflow.
      * Uses the already-cached history instead of fetching again.
      */
-    private fun startReplay() {
+    private fun startReplay(debug: Boolean = false) {
         val workflowId = currentWorkflowId ?: return
 
         // Get workflow type and raw history from cache
@@ -705,7 +714,7 @@ class WorkflowInspectorPanel(private val project: Project) : JBPanel<WorkflowIns
             return
         }
 
-        WorkflowReplayService(project).replayWithCachedHistory(rawHistory, workflowType, workflowId)
+        WorkflowReplayService(project).replayWithCachedHistory(rawHistory, workflowType, workflowId, debug)
     }
 
     /**
