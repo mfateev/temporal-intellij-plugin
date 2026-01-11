@@ -14,6 +14,7 @@ import com.intellij.ui.components.JBTextField
 import com.intellij.util.ui.JBUI
 import io.temporal.api.history.v1.History
 import io.temporal.api.history.v1.HistoryEvent
+import io.temporal.intellij.replay.ReplayProgressListener
 import io.temporal.intellij.replay.WorkflowReplayService
 import io.temporal.intellij.settings.TemporalSettings
 import java.awt.BorderLayout
@@ -58,6 +59,7 @@ class WorkflowInspectorPanel(private val project: Project) : JBPanel<WorkflowIns
     private val statusLabel = JBLabel()
     private val tabbedPane = JTabbedPane()
     private val executionInfoPanel = ExecutionInfoPanel()
+    private val replayStatusPanel = ReplayStatusPanel(project)
     private val pendingActivitiesPanel = PendingActivitiesPanel()
     private val pendingChildrenPanel = PendingChildrenPanel()
     private val eventHistoryTreePanel = EventHistoryTreePanel()
@@ -117,6 +119,8 @@ class WorkflowInspectorPanel(private val project: Project) : JBPanel<WorkflowIns
         val overviewPanel = JBPanel<JBPanel<*>>()
         overviewPanel.layout = BoxLayout(overviewPanel, BoxLayout.Y_AXIS)
         overviewPanel.add(executionInfoPanel)
+        overviewPanel.add(Box.createVerticalStrut(10))
+        overviewPanel.add(replayStatusPanel)
         overviewPanel.add(Box.createVerticalStrut(10))
         overviewPanel.add(pendingActivitiesPanel)
         overviewPanel.add(Box.createVerticalStrut(10))
@@ -906,5 +910,84 @@ class PendingChildrenPanel : JBPanel<PendingChildrenPanel>(BorderLayout()) {
         sb.append("</body></html>")
 
         contentLabel.text = sb.toString()
+    }
+}
+
+/**
+ * Panel showing replay status.
+ * Subscribes to ReplayProgressListener to show replay progress.
+ */
+class ReplayStatusPanel(project: Project) : JBPanel<ReplayStatusPanel>(BorderLayout()) {
+    private val contentLabel = JBLabel()
+    private var currentStatus: ReplayState = ReplayState.READY
+
+    private enum class ReplayState {
+        READY, REPLAYING, SUCCESS, FAILED
+    }
+
+    private var lastWorkflowId: String = ""
+    private var lastWorkflowType: String = ""
+    private var lastErrorMessage: String? = null
+
+    init {
+        border = JBUI.Borders.empty(5)
+        add(contentLabel, BorderLayout.CENTER)
+        updateDisplay()
+
+        // Subscribe to replay progress events
+        project.messageBus.connect().subscribe(
+            ReplayProgressListener.TOPIC,
+            object : ReplayProgressListener {
+                override fun onReplayStarted(workflowId: String, workflowType: String) {
+                    currentStatus = ReplayState.REPLAYING
+                    lastWorkflowId = workflowId
+                    lastWorkflowType = workflowType
+                    lastErrorMessage = null
+                    ApplicationManager.getApplication().invokeLater { updateDisplay() }
+                }
+
+                override fun onReplayFinished(workflowId: String, success: Boolean, errorMessage: String?) {
+                    currentStatus = if (success) ReplayState.SUCCESS else ReplayState.FAILED
+                    lastWorkflowId = workflowId
+                    lastErrorMessage = errorMessage
+                    ApplicationManager.getApplication().invokeLater { updateDisplay() }
+                }
+            }
+        )
+    }
+
+    private fun updateDisplay() {
+        val (statusText, statusColor) = when (currentStatus) {
+            ReplayState.READY -> "Ready" to "#757575"
+            ReplayState.REPLAYING -> "Replaying..." to "#2196F3"
+            ReplayState.SUCCESS -> "Success" to "#4CAF50"
+            ReplayState.FAILED -> "Failed" to "#f44336"
+        }
+
+        val details = when (currentStatus) {
+            ReplayState.READY -> ""
+            ReplayState.REPLAYING -> "<tr><td><b>Workflow:</b></td><td>$lastWorkflowType</td></tr>"
+            ReplayState.SUCCESS -> "<tr><td><b>Workflow:</b></td><td>$lastWorkflowId</td></tr>"
+            ReplayState.FAILED -> """
+                <tr><td><b>Workflow:</b></td><td>$lastWorkflowId</td></tr>
+                <tr><td><b>Error:</b></td><td style='color: #f44336;'>${lastErrorMessage ?: "Unknown error"}</td></tr>
+            """.trimIndent()
+        }
+
+        contentLabel.text = """
+            <html>
+            <body style='font-family: sans-serif;'>
+            <table cellpadding='3'>
+                <tr>
+                    <td colspan='2'><b style='font-size: 1.1em;'>▼ REPLAY STATUS</b>
+                    <span style='background-color: $statusColor; color: white; padding: 2px 6px; border-radius: 3px; margin-left: 10px;'>
+                        $statusText
+                    </span></td>
+                </tr>
+                $details
+            </table>
+            </body>
+            </html>
+        """.trimIndent()
     }
 }

@@ -28,6 +28,13 @@
                 nonDefaultProject="true"/>
         <configurationType
                 implementation="io.temporal.intellij.replay.runconfig.WorkflowReplayRunConfigurationType"/>
+        <statusBarWidgetFactory
+                id="TemporalReplayStatus"
+                implementation="io.temporal.intellij.replay.ReplayStatusWidgetFactory"/>
+        <projectService
+                serviceImplementation="io.temporal.intellij.replay.debug.ReplayDebugSessionListener"/>
+        <postStartupActivity
+                implementation="io.temporal.intellij.replay.debug.ReplayDebugStartupActivity"/>
     </extensions>
 
     <actions>
@@ -38,6 +45,10 @@
                     text="Hello World"
                     icon="/icons/temporal_16.png"
                     description="Say hello from Temporal plugin"/>
+            <action id="Temporal.TestReplayStatus"
+                    class="io.temporal.intellij.replay.TestReplayStatusAction"
+                    text="Test Replay Status"
+                    description="Test the replay status bar widget"/>
         </group>
 
         <!-- Tool window title bar settings action -->

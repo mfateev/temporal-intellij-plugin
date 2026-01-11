@@ -86,9 +86,15 @@ public class WorkflowReplayRunner {
 
         // Execute replay
         try {
+            // Notify debugger that replay is starting
+            DebugReplayMarker.onReplayStarted(historyFile, workflowClassName);
+
             long startTime = System.currentTimeMillis();
             WorkflowReplayer.replayWorkflowExecution(historyJson, workflowClass, additional);
             long duration = System.currentTimeMillis() - startTime;
+
+            // Notify debugger that replay finished successfully
+            DebugReplayMarker.onReplayFinished(historyFile);
 
             System.out.println();
             System.out.println("============================================================");
@@ -98,6 +104,9 @@ public class WorkflowReplayRunner {
             System.out.println("The workflow implementation is compatible with the recorded history.");
 
         } catch (Exception e) {
+            // Notify debugger that replay failed
+            DebugReplayMarker.onReplayFailed(historyFile, e.getMessage());
+
             System.err.println();
             System.err.println("============================================================");
             System.err.println("REPLAY FAILED");

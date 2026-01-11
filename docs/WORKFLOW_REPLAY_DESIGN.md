@@ -587,6 +587,82 @@ src/main/java/io/temporal/intellij/replay/
 | Very large history files (>100MB) | Consider streaming or pagination; show progress indicator |
 | Kotlin workflow implementations | Test PSI search works for Kotlin classes too |
 
+## Replay Progress Reporting
+
+### Goal
+
+Display replay progress in the Temporal tool window's Overview tab, showing status updates as the replay executes.
+
+### Approaches Considered
+
+| Approach | Viable | Reason |
+|----------|--------|--------|
+| **Console output parsing** | ❌ No | Workflow code may output arbitrary text to stdout/stderr, making it impossible to reliably distinguish marker output from workflow output |
+| **MessageBus (IntelliJ)** | ❌ No | Replay runs in a separate JVM process; MessageBus only works within the same JVM |
+| **Method breakpoints (JDWP)** | ❌ No | Debug-mode only; complex to implement programmatic breakpoint setting |
+| **Socket-based IPC** | ✅ Yes | Simple, works in both Run and Debug modes, supports bidirectional communication |
+
+### Implemented Approach: Inbound Socket Server
+
+The plugin starts a TCP server socket on a random port and passes the port to the replay process. The replay process connects and sends JSON status messages.
+
+#### Architecture
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│                         IntelliJ Plugin (JVM 1)                          │
+│                                                                          │
+│  ┌──────────────────┐    ┌─────────────────┐    ┌────────────────────┐  │
+│  │ ReplayStatusServer│◄───│  MessageBus     │───►│ ReplayStatusPanel  │  │
+│  │ (TCP port N)      │    │  (pub/sub)      │    │ (Overview tab)     │  │
+│  └────────▲─────────┘    └─────────────────┘    └────────────────────┘  │
+│           │                                                              │
+└───────────┼──────────────────────────────────────────────────────────────┘
+            │ TCP Socket (localhost:N)
+            │
+┌───────────┼──────────────────────────────────────────────────────────────┐
+│           │                  Replay Process (JVM 2)                       │
+│           │                                                               │
+│  ┌────────▼─────────┐    ┌─────────────────┐    ┌────────────────────┐   │
+│  │ DebugReplayMarker│───►│WorkflowReplay   │───►│  WorkflowReplayer  │   │
+│  │ (socket client)  │    │Runner (main)    │    │  (Temporal SDK)    │   │
+│  └──────────────────┘    └─────────────────┘    └────────────────────┘   │
+│                                                                           │
+└───────────────────────────────────────────────────────────────────────────┘
+```
+
+#### Protocol
+
+Plain TCP socket with line-based JSON messages (not HTTP):
+
+```json
+{"type":"STARTED","workflowId":"<history-file>","workflowType":"<class-name>"}
+{"type":"EVENT","workflowId":"<id>","eventId":123}
+{"type":"FINISHED","workflowId":"<id>"}
+{"type":"FAILED","workflowId":"<id>","error":"<message>"}
+```
+
+#### Implementation Files
+
+| File | Purpose |
+|------|---------|
+| `ReplayStatusServer.kt` | TCP server that listens for status messages from replay process |
+| `DebugReplayMarker.java` | Client that sends status messages via socket (in replay process) |
+| `ReplayProgressTopic.kt` | MessageBus topic for replay events within the plugin |
+| `ReplayStatusPanel` | UI panel in Overview tab that displays replay status |
+| `WorkflowReplayRunState.kt` | Starts server and passes port via `-Dtemporal.replay.status.port` |
+
+#### Flow
+
+1. `WorkflowReplayRunState.createJavaParameters()` creates `ReplayStatusServer` on random port
+2. Port passed to replay process via VM argument: `-Dtemporal.replay.status.port=<port>`
+3. `WorkflowReplayRunner.main()` calls `DebugReplayMarker.onReplayStarted()`
+4. `DebugReplayMarker` reads port from system property, connects to localhost
+5. Sends JSON status messages via `PrintWriter.println()`
+6. `ReplayStatusServer` receives messages, publishes to `ReplayProgressListener` MessageBus
+7. `ReplayStatusPanel` (in Overview tab) subscribes and updates UI
+8. On process termination, server is stopped and cleaned up
+
 ## Future Enhancements
 
 1. **Batch replay**: Replay multiple workflows from a list

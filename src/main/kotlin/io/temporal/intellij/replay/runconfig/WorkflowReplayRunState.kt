@@ -2,10 +2,14 @@ package io.temporal.intellij.replay.runconfig
 
 import com.intellij.execution.configurations.JavaCommandLineState
 import com.intellij.execution.configurations.JavaParameters
+import com.intellij.execution.process.OSProcessHandler
+import com.intellij.execution.process.ProcessAdapter
+import com.intellij.execution.process.ProcessEvent
 import com.intellij.execution.runners.ExecutionEnvironment
 import com.intellij.openapi.module.Module
 import com.intellij.openapi.module.ModuleManager
 import com.intellij.openapi.roots.OrderEnumerator
+import io.temporal.intellij.replay.ReplayStatusServer
 import java.io.File
 import java.nio.file.Files
 
@@ -23,7 +27,27 @@ class WorkflowReplayRunState(
 
     companion object {
         private const val RUNNER_CLASS = "io.temporal.intellij.replay.WorkflowReplayRunner"
-        private const val RUNNER_CLASS_PATH = "io/temporal/intellij/replay/WorkflowReplayRunner.class"
+        private const val PORT_PROPERTY = "temporal.replay.status.port"
+        private val RUNNER_CLASSES = listOf(
+            "io/temporal/intellij/replay/WorkflowReplayRunner.class",
+            "io/temporal/intellij/replay/DebugReplayMarker.class"
+        )
+    }
+
+    private var statusServer: ReplayStatusServer? = null
+
+    override fun startProcess(): OSProcessHandler {
+        val handler = super.startProcess()
+
+        // Clean up status server when process terminates
+        handler.addProcessListener(object : ProcessAdapter() {
+            override fun processTerminated(event: ProcessEvent) {
+                statusServer?.stop()
+                statusServer = null
+            }
+        })
+
+        return handler
     }
 
     override fun createJavaParameters(): JavaParameters {
@@ -65,6 +89,13 @@ class WorkflowReplayRunState(
 
         // Main class - the replay runner
         params.mainClass = RUNNER_CLASS
+
+        // Start status server for replay progress reporting
+        statusServer = ReplayStatusServer(environment.project)
+        val port = statusServer!!.start()
+
+        // Pass the status server port as a system property
+        params.vmParametersList.add("-D$PORT_PROPERTY=$port")
 
         // Pass arguments
         params.programParametersList.add("--workflow-class")
@@ -110,12 +141,12 @@ class WorkflowReplayRunState(
     }
 
     /**
-     * Extract the WorkflowReplayRunner.class from the plugin to a temp directory.
+     * Extract the replay runner classes from the plugin to a temp directory.
      * This allows the runner to be executed with the user's project classpath
      * without requiring the entire plugin JAR.
      */
     private fun extractRunnerClass(): File {
-        // Create temp directory for extracted class
+        // Create temp directory for extracted classes
         val tempDir = Files.createTempDirectory("temporal-replay-runner").toFile()
         tempDir.deleteOnExit()
 
@@ -123,17 +154,20 @@ class WorkflowReplayRunState(
         val packageDir = File(tempDir, "io/temporal/intellij/replay")
         packageDir.mkdirs()
 
-        // Extract the class file from plugin resources
-        val classStream = this::class.java.classLoader.getResourceAsStream(RUNNER_CLASS_PATH)
-            ?: throw IllegalStateException("Could not find WorkflowReplayRunner.class in plugin resources")
+        // Extract all required class files from plugin resources
+        for (classPath in RUNNER_CLASSES) {
+            val classStream = this::class.java.classLoader.getResourceAsStream(classPath)
+                ?: throw IllegalStateException("Could not find $classPath in plugin resources")
 
-        val targetFile = File(packageDir, "WorkflowReplayRunner.class")
-        classStream.use { input ->
-            targetFile.outputStream().use { output ->
-                input.copyTo(output)
+            val className = classPath.substringAfterLast("/")
+            val targetFile = File(packageDir, className)
+            classStream.use { input ->
+                targetFile.outputStream().use { output ->
+                    input.copyTo(output)
+                }
             }
+            targetFile.deleteOnExit()
         }
-        targetFile.deleteOnExit()
 
         return tempDir
     }
