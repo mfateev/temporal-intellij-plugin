@@ -109,6 +109,13 @@ public final class DebugReplayMarker {
     /**
      * Called when processing an event (for future per-event tracking).
      *
+     * <p>NOTE: This method is currently unused because the Temporal SDK's WorkflowReplayer
+     * does not expose hooks for tracking which event is being processed during replay.
+     * The History protobuf class is final, preventing custom iterator wrappers.
+     *
+     * <p>TODO: Once sdk-java adds replay progress callbacks (e.g., ReplayListener interface),
+     * this method can be called to report per-event progress to the plugin UI.
+     *
      * @param workflowId The workflow ID
      * @param eventId The event ID being processed
      */

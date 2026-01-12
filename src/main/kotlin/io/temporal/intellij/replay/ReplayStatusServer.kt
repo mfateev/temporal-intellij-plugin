@@ -140,8 +140,11 @@ class ReplayStatusServer(private val project: Project, private val expectedToken
                     "FINISHED" -> publisher.onReplayFinished(workflowId, true, null)
                     "FAILED" -> publisher.onReplayFinished(workflowId, false, error)
                     "EVENT" -> {
-                        // Future: publisher.onEventProcessed(workflowId, eventId)
-                        // For now, just log
+                        // TODO: Implement per-event progress tracking once sdk-java supports it.
+                        // Currently, WorkflowReplayer doesn't expose hooks for tracking which event
+                        // is being processed. The History protobuf class is final, preventing
+                        // custom iterator wrappers. See: https://github.com/temporalio/sdk-java
+                        // Proposed enhancement: ReplayListener.onEventProcessing(eventId, totalEvents)
                         LOG.debug("Replay processing event $eventId")
                     }
                 }
