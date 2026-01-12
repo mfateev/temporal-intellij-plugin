@@ -14,10 +14,7 @@ import com.intellij.ui.components.JBPanel
 import com.intellij.ui.components.JBScrollPane
 import com.intellij.ui.components.JBTextField
 import com.intellij.util.ui.JBUI
-import io.temporal.api.history.v1.History
 import io.temporal.api.history.v1.HistoryEvent
-import io.temporal.intellij.replay.ReplayProgressListener
-import io.temporal.intellij.replay.WorkflowReplayService
 import io.temporal.intellij.settings.TemporalSettings
 import java.awt.BorderLayout
 import java.awt.FlowLayout
@@ -53,19 +50,16 @@ class WorkflowInspectorPanel(private val project: Project) : JBPanel<WorkflowIns
     private val browseButton = JButton("...")
     private val runIdField = JBTextField(36)  // UUID length
     private val refreshButton = JButton("Refresh")
-    private val replayButton = JButton("Replay")
-    private val debugReplayButton = JButton("Debug")
-    private val importHistoryButton = JButton("Import JSON...")
 
     // Display components
     private val statusLabel = JBLabel()
     private val tabbedPane = JTabbedPane()
     private val executionInfoPanel = ExecutionInfoPanel()
-    private val replayStatusPanel = ReplayStatusPanel(project)
     private val pendingActivitiesPanel = PendingActivitiesPanel()
     private val pendingChildrenPanel = PendingChildrenPanel()
     private val eventHistoryTreePanel = EventHistoryTreePanel()
     private val queryPanel = QueryPanel(project)
+    private val replayPanel = ReplayPanel(project)
 
     // Auto-refresh components (long polling)
     private val autoRefreshCheckbox = JCheckBox("Live updates")
@@ -122,8 +116,6 @@ class WorkflowInspectorPanel(private val project: Project) : JBPanel<WorkflowIns
         overviewPanel.layout = BoxLayout(overviewPanel, BoxLayout.Y_AXIS)
         overviewPanel.add(executionInfoPanel)
         overviewPanel.add(Box.createVerticalStrut(10))
-        overviewPanel.add(replayStatusPanel)
-        overviewPanel.add(Box.createVerticalStrut(10))
         overviewPanel.add(pendingActivitiesPanel)
         overviewPanel.add(Box.createVerticalStrut(10))
         overviewPanel.add(pendingChildrenPanel)
@@ -137,6 +129,7 @@ class WorkflowInspectorPanel(private val project: Project) : JBPanel<WorkflowIns
         tabbedPane.addTab("Overview", overviewContainer)
         tabbedPane.addTab("History", eventHistoryTreePanel)
         tabbedPane.addTab("Query", queryPanel)
+        tabbedPane.addTab("Replay", replayPanel)
 
         contentPanel.add(tabbedPane, BorderLayout.CENTER)
 
@@ -176,20 +169,6 @@ class WorkflowInspectorPanel(private val project: Project) : JBPanel<WorkflowIns
         refreshButton.toolTipText = "Fetch and display workflow execution details"
         refreshButton.addActionListener { loadWorkflow() }
         row3.add(refreshButton)
-
-        replayButton.toolTipText = "Replay this workflow against local implementation"
-        replayButton.isEnabled = false
-        replayButton.addActionListener { startReplay(debug = false) }
-        row3.add(replayButton)
-
-        debugReplayButton.toolTipText = "Replay with debugger attached - set breakpoints in your workflow code"
-        debugReplayButton.isEnabled = false
-        debugReplayButton.addActionListener { startReplay(debug = true) }
-        row3.add(debugReplayButton)
-
-        importHistoryButton.toolTipText = "Import workflow history from JSON file and replay"
-        importHistoryButton.addActionListener { importHistoryFile() }
-        row3.add(importHistoryButton)
 
         // Live updates controls (long polling)
         row3.add(Box.createHorizontalStrut(10))
@@ -281,11 +260,10 @@ class WorkflowInspectorPanel(private val project: Project) : JBPanel<WorkflowIns
         // Clear UI
         eventHistoryTreePanel.clear()
 
-        // Reset checkbox and button state
+        // Reset checkbox state and replay panel
         autoRefreshCheckbox.isSelected = false
         autoRefreshCheckbox.isEnabled = false
-        replayButton.isEnabled = false
-        debugReplayButton.isEnabled = false
+        replayPanel.clearWorkflowContext()
         lastRefreshLabel.text = ""
     }
 
@@ -349,7 +327,15 @@ class WorkflowInspectorPanel(private val project: Project) : JBPanel<WorkflowIns
                     val event = service.parseEvent(rawEvent)
 
                     // Always add to cached events and check display mode atomically
-                    val (isNewEvent, shouldUpdateUi, eventsSnapshot) = synchronized(stateLock) {
+                    data class UpdateData(
+                        val isNewEvent: Boolean,
+                        val shouldUpdateUi: Boolean,
+                        val eventsSnapshot: List<WorkflowHistoryEvent>,
+                        val rawEventsSnapshot: List<HistoryEvent>,
+                        val workflowType: String?
+                    )
+
+                    val updateData = synchronized(stateLock) {
                         val isNew = if (cachedEvents.none { it.eventId == event.eventId }) {
                             cachedEvents.add(event)
                             cachedRawEvents.add(rawEvent)
@@ -371,18 +357,29 @@ class WorkflowInspectorPanel(private val project: Project) : JBPanel<WorkflowIns
                             emptyList()
                         }
 
-                        Triple(isNew, shouldUpdate, snapshot)
+                        val rawSnapshot = if (shouldUpdate) cachedRawEvents.toList() else emptyList()
+                        val wfType = cachedEvents.firstOrNull()?.details?.get("workflowType")
+
+                        UpdateData(isNew, shouldUpdate, snapshot, rawSnapshot, wfType)
                     }
 
                     // Update UI outside the lock
-                    if (shouldUpdateUi) {
+                    if (updateData.shouldUpdateUi) {
                         ApplicationManager.getApplication().invokeLater {
                             // Re-check conditions on EDT
                             if (longPollActive && currentWorkflowId == workflowId && displayMode == DisplayMode.LIVE) {
-                                eventHistoryTreePanel.update(eventsSnapshot)
+                                eventHistoryTreePanel.update(updateData.eventsSnapshot)
                                 eventHistoryTreePanel.scrollToBottom()
                                 updateLastRefreshLabel()
                                 refreshWorkflowInfoSilently()
+
+                                // Update replay panel context
+                                replayPanel.setWorkflowContext(
+                                    workflowId,
+                                    currentRunId,
+                                    updateData.rawEventsSnapshot,
+                                    updateData.workflowType
+                                )
                             }
                         }
                     }
@@ -599,10 +596,6 @@ class WorkflowInspectorPanel(private val project: Project) : JBPanel<WorkflowIns
         val isRunning = info.status == WorkflowStatus.RUNNING
         autoRefreshCheckbox.isEnabled = isRunning
 
-        // Enable replay buttons when workflow is loaded
-        replayButton.isEnabled = true
-        debugReplayButton.isEnabled = true
-
         // Set up query panel context
         queryPanel.setWorkflowContext(currentWorkflowId, currentRunId, workflowService)
 
@@ -661,6 +654,10 @@ class WorkflowInspectorPanel(private val project: Project) : JBPanel<WorkflowIns
 
                 ApplicationManager.getApplication().invokeLater {
                     eventHistoryTreePanel.update(parsedEvents)
+
+                    // Update replay panel context
+                    val workflowType = parsedEvents.firstOrNull()?.details?.get("workflowType")
+                    replayPanel.setWorkflowContext(workflowId, currentRunId, rawEvents, workflowType)
                 }
             }
         })
@@ -677,8 +674,7 @@ class WorkflowInspectorPanel(private val project: Project) : JBPanel<WorkflowIns
             stopLongPolling()
             autoRefreshCheckbox.isSelected = false
             autoRefreshCheckbox.isEnabled = false
-            replayButton.isEnabled = false
-            debugReplayButton.isEnabled = false
+            replayPanel.clearWorkflowContext()
         }
     }
 
@@ -692,42 +688,6 @@ class WorkflowInspectorPanel(private val project: Project) : JBPanel<WorkflowIns
 
     fun collapseAllHistory() {
         eventHistoryTreePanel.collapseAll()
-    }
-
-    /**
-     * Start workflow replay for the currently loaded workflow.
-     * Uses the already-cached history instead of fetching again.
-     */
-    private fun startReplay(debug: Boolean = false) {
-        val workflowId = currentWorkflowId ?: return
-
-        // Get workflow type and raw history from cache
-        val (workflowType, rawHistory) = synchronized(stateLock) {
-            val type = cachedEvents.firstOrNull()?.details?.get("workflowType")
-            val history = if (cachedRawEvents.isNotEmpty()) {
-                History.newBuilder().addAllEvents(cachedRawEvents).build()
-            } else null
-            Pair(type, history)
-        }
-
-        if (workflowType == null) {
-            showError("Could not determine workflow type. Please load the workflow first.")
-            return
-        }
-
-        if (rawHistory == null || rawHistory.eventsCount == 0) {
-            showError("No history loaded. Please refresh the workflow first.")
-            return
-        }
-
-        WorkflowReplayService(project).replayWithCachedHistory(rawHistory, workflowType, workflowId, debug)
-    }
-
-    /**
-     * Import workflow history from a JSON file and replay it.
-     */
-    private fun importHistoryFile() {
-        WorkflowReplayService(project).replayFromFile()
     }
 
     fun dispose() {
@@ -912,138 +872,5 @@ class PendingChildrenPanel : JBPanel<PendingChildrenPanel>(BorderLayout()) {
         sb.append("</body></html>")
 
         contentLabel.text = sb.toString()
-    }
-}
-
-/**
- * Panel showing replay status.
- * Subscribes to ReplayProgressListener to show replay progress.
- */
-class ReplayStatusPanel(private val project: Project) : JBPanel<ReplayStatusPanel>(BorderLayout()) {
-    private val statusLabel = JBLabel()
-    private val workflowLink = com.intellij.ui.components.ActionLink("") { navigateToClass(lastWorkflowType) }
-    private val errorLabel = JBLabel()
-    private var currentStatus: ReplayState = ReplayState.READY
-
-    private enum class ReplayState {
-        READY, REPLAYING, SUCCESS, FAILED
-    }
-
-    private var lastWorkflowType: String = ""
-    private var lastErrorMessage: String? = null
-
-    init {
-        border = JBUI.Borders.empty(5)
-
-        // Layout
-        val contentPanel = JBPanel<JBPanel<*>>(java.awt.GridBagLayout())
-        val gbc = java.awt.GridBagConstraints().apply {
-            anchor = java.awt.GridBagConstraints.WEST
-            insets = java.awt.Insets(2, 5, 2, 5)
-        }
-
-        // Status row
-        gbc.gridx = 0; gbc.gridy = 0; gbc.gridwidth = 2
-        contentPanel.add(statusLabel, gbc)
-
-        // Workflow row
-        gbc.gridx = 0; gbc.gridy = 1; gbc.gridwidth = 1
-        contentPanel.add(JBLabel("<html><b>Workflow:</b></html>"), gbc)
-        gbc.gridx = 1
-        contentPanel.add(workflowLink, gbc)
-
-        // Error row
-        gbc.gridx = 0; gbc.gridy = 2; gbc.gridwidth = 2
-        contentPanel.add(errorLabel, gbc)
-
-        add(contentPanel, BorderLayout.CENTER)
-        updateDisplay()
-
-        // Subscribe to replay progress events
-        project.messageBus.connect().subscribe(
-            ReplayProgressListener.TOPIC,
-            object : ReplayProgressListener {
-                override fun onReplayStarted(workflowId: String, workflowType: String) {
-                    currentStatus = ReplayState.REPLAYING
-                    lastWorkflowType = workflowType
-                    lastErrorMessage = null
-                    ApplicationManager.getApplication().invokeLater { updateDisplay() }
-                }
-
-                override fun onReplayFinished(workflowId: String, success: Boolean, errorMessage: String?) {
-                    currentStatus = if (success) ReplayState.SUCCESS else ReplayState.FAILED
-                    lastErrorMessage = errorMessage
-                    ApplicationManager.getApplication().invokeLater { updateDisplay() }
-                }
-            }
-        )
-    }
-
-    private fun navigateToClass(className: String) {
-        if (className.isEmpty()) return
-
-        // Convert JVM inner class notation ($) to PSI notation (.)
-        val psiClassName = className.replace('$', '.')
-
-        // Run PSI lookup on background thread to avoid blocking EDT
-        ApplicationManager.getApplication().executeOnPooledThread {
-            com.intellij.openapi.application.ReadAction.run<RuntimeException> {
-                val psiClass = JavaPsiFacade.getInstance(project)
-                    .findClass(psiClassName, GlobalSearchScope.allScope(project))
-
-                if (psiClass == null) {
-                    return@run
-                }
-
-                val navigatable = psiClass.navigationElement as? com.intellij.pom.Navigatable
-                val vFile = psiClass.containingFile?.virtualFile
-
-                // Navigate on EDT
-                ApplicationManager.getApplication().invokeLater {
-                    if (navigatable != null && navigatable.canNavigate()) {
-                        navigatable.navigate(true)
-                    } else if (vFile != null) {
-                        com.intellij.openapi.fileEditor.OpenFileDescriptor(project, vFile).navigate(true)
-                    }
-                }
-            }
-        }
-    }
-
-    private fun updateDisplay() {
-        val (statusText, statusColor) = when (currentStatus) {
-            ReplayState.READY -> "Ready" to "#757575"
-            ReplayState.REPLAYING -> "Replaying..." to "#2196F3"
-            ReplayState.SUCCESS -> "Success" to "#4CAF50"
-            ReplayState.FAILED -> "Failed" to "#f44336"
-        }
-
-        statusLabel.text = "<html><b style='font-size: 1.1em;'>▼ REPLAY STATUS</b> " +
-            "<span style='color: $statusColor;'>[$statusText]</span></html>"
-
-        // Update workflow link - extract simple name (handles both . and $ separators)
-        if (lastWorkflowType.isNotEmpty() && currentStatus != ReplayState.READY) {
-            val simpleName = lastWorkflowType.substringAfterLast('.').substringAfterLast('$')
-            workflowLink.text = simpleName
-            workflowLink.isVisible = true
-        } else {
-            workflowLink.isVisible = false
-        }
-
-        // Update error label
-        if (currentStatus == ReplayState.FAILED && lastErrorMessage != null) {
-            errorLabel.text = "<html><b>Error:</b> <font color='#f44336'>${escapeHtml(lastErrorMessage!!)}</font></html>"
-            errorLabel.isVisible = true
-        } else {
-            errorLabel.isVisible = false
-        }
-    }
-
-    private fun escapeHtml(text: String): String {
-        return text
-            .replace("&", "&amp;")
-            .replace("<", "&lt;")
-            .replace(">", "&gt;")
-            .replace("\"", "&quot;")
     }
 }
